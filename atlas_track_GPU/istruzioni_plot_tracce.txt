@@ -1,0 +1,13 @@
+Ciao Mauro,
+ uso gnuplot.
+Per prima cosa commenti le linee con la descrizione delle traccie:
+sed -e 's/^0/#0/g' pippo.txt > p1.txt
+sed -e 's/^-0/#-0/g' p1.txt > p2.txt
+
+Poi usi splot per plottare in 3d e plot per XY
+
+gnuplot> splot "p2.txt" using 1:2:3 with points
+gnuplot> plot "p2.txt" using 1:2 with points
+
+Ti conviene fare dei file con meno traccie altrimenti si vede poco
+Franco 

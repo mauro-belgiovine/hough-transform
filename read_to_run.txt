@@ -1,0 +1,6 @@
+
+1) impostare LD_LIBRARY_PATH con comando 'export' in questo modo:
+
+LD_LIBRARY_PATH=":/usr/local/root/lib:/usr/local/cuda-5.5/lib64:/usr/local/lib:/usr/local/lib64:/usr/lib:/usr/lib64"
+
+2) TODO: trovare modo di linkare correttamente GTK2. Rebuild?
