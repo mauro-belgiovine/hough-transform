@@ -1,18 +1,12 @@
-<<<<<<< HEAD
-hough
-=====
-
-Linear Hough Transformation in C++
-=======
 hough-transform
 ===============
 
-<<<<<<< HEAD
-Various implementation for Hough Transform
->>>>>>> 8e49120347b599dcc8b4c931d2fe411a680cd072
-=======
-Various implementation for Hough Transform (all OpenCV functions from 4.8.2):
 
-1) main.cpp + hough.cpp + hough.h: Hough Transform C++ plain code, with some utilities from OpenCV
-2) 
->>>>>>> 154fa7d14605a0d4373ee1dd14e3303ff53d6e84
+Various implementation for Hough Transform (all OpenCV functions are referred to 2.4.8):
+
+1) main.cpp + hough.cpp + hough.h: Hough Transform C++ plain code, with some OpenCV utilities (from http://www.keymolen.com/2013/05/hough-transformation-c-implementation.html)
+2) houghlines.cpp: show OpenCV HoughLinesP (probabilistic) execution time on CPU and GPU
+3) hough_partialcircle.cpp: show cirlces and partial-circles tracked in an input image
+4) HoughLines_Demo.cpp: edited OpenCV HoughLines_Demo source to generate input image starting from a list of polar coordinates (atlas_track_GPU/random1.txt) [previous version in hough_tracks.cpp]
+5) hough_circle.cpp: plain C/C++ implementation for Hough Circle Transform (unfixed radius)
+
