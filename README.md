@@ -4,7 +4,7 @@ hough-transform
 
 Various implementation for Hough Transform (all OpenCV functions are referred to 2.4.8):
 
-1) main.cpp + hough.cpp + hough.h: Hough Transform C++ plain code, with some OpenCV utilities (from http://www.keymolen.com/2013/05/hough-transformation-c-implementation.html)
+1) main.cpp + hough.cu + hough.h: Hough Transform C++ plain code + CUDA-Trasform code, with some OpenCV utilities (from http://www.keymolen.com/2013/05/hough-transformation-c-implementation.html)
 
 2) houghlines.cpp: show OpenCV HoughLinesP (probabilistic) execution time on CPU and GPU
 
