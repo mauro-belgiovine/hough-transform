@@ -33,7 +33,7 @@
 // **********************************************************************************
 
 #include <dirent.h>
-#include <string>
+#include <cstring>
 #include <map>
 #include <iostream>
 #include <cstdio>
@@ -48,6 +48,11 @@
 std::string img_path;
 int threshold = 0;
 
+//DEVICE code
+#define CPU_DEV 0
+#define GPU_DEV 1
+int device = CPU_DEV;
+
 const char* CW_IMG_ORIGINAL = "Result";
 const char* CW_IMG_EDGE 	= "Canny Edge Detection";
 const char* CW_ACCUMULATOR  = "Accumulator";
@@ -59,9 +64,10 @@ void usage(char * s)
 {
 
 	fprintf( stderr, "\n");
-    fprintf( stderr, "%s -s <source file> [-t <threshold>] - hough transform. build: %s-%s \n", s, __DATE__, __TIME__);
+    fprintf( stderr, "%s -s <source file> [-t <threshold>] [-d <device>] - hough transform. build: %s-%s \n", s, __DATE__, __TIME__);
 	fprintf( stderr, "   s: path image file\n");
 	fprintf( stderr, "   t: hough threshold\n");
+	fprintf( stderr, "   d: 'cpu' OR 'gpu'\n");
 	fprintf( stderr, "\nexample: ./hough -s ./img/hangover-0232.jpg -t 80\n");
 	fprintf( stderr, "\n");
 }
@@ -69,10 +75,23 @@ void usage(char * s)
 int main(int argc, char** argv) {
 
 	int c;
-	while ( ((c = getopt( argc, argv, "s:t:?" ) ) ) != -1 )
+	std::string device_arg;
+	
+	while ( ((c = getopt( argc, argv, "d:s:t:?" ) ) ) != -1 )
 	{
 	    switch (c)
 	    {
+	    case 'd':
+		device_arg = optarg;
+		if(strcmp(device_arg.c_str(), "gpu") == 0){
+		  device = GPU_DEV;
+		}else if(strcmp(device_arg.c_str(), "cpu") == 0){
+		  device = CPU_DEV;
+		}else{
+		  usage(argv[0]);
+		  return -1;
+		}
+		break;
 	    case 's':
 	    	img_path = optarg;
 	    	break;
@@ -80,9 +99,9 @@ int main(int argc, char** argv) {
 	    	threshold = atoi(optarg);
 	    	break;
 	    case '?':
-        default:
-			usage(argv[0]);
-			return -1;
+	    default:
+		usage(argv[0]);
+		return -1;
 	    }
 	}
 
@@ -121,8 +140,12 @@ void doTransform(std::string file_path, int threshold)
 
 	//Transform
 	keymolen::Hough hough;
-	hough.Transform(img_edge.data, w, h);
-
+	//TODO: controllare differenze in accumulatore?
+	if(device == CPU_DEV){
+	  hough.Transform(img_edge.data, w, h);
+	}else if(device == GPU_DEV){
+	  hough.Transform_GPU(img_edge.data, w, h);
+	}
 
 
 	if(threshold == 0)

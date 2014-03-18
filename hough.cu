@@ -33,12 +33,53 @@
 // **********************************************************************************
 
 #include "hough.h"
+#include "simpleIndexing.cu"
 #include <cmath>
 #include <iostream>
 #include <string.h>
 #include <stdlib.h>
+#include <cuda_runtime.h>
+// includes, project
+#include <helper_cuda.h>
+#include <helper_functions.h> // helper utility functions 
+
 
 #define DEG2RAD 0.017453293f
+
+#define SET_GRID_DIM(npoints, threadsPerBlock) ((npoints+(threadsPerBlock-1))/threadsPerBlock)
+#define BLOCK_DIM 32
+
+using namespace std;
+
+/* CUDA functions definitions */
+//every CUDA Thread works processes a point of the input image
+__global__ void CudaTransform(unsigned char* dev_img, unsigned int *dev_accu, int w, int h){
+  
+  //calculate params
+  float hough_h = ((sqrt(2.0) * (float)(h>w?h:w)) / 2.0);
+	  
+  float center_x = w/2;
+  float center_y = h/2;
+  
+  //calculate index which this thread have to process
+  unsigned int index = getGlobalIdx_2D_2D();
+  //calculate coordinates for corresponding index in entire image
+  int x = index % w;
+  int y = index / w;
+  
+  if( dev_img[index] > 250 ){ //se il punto è bianco (val in scala di grigio > 250)
+    for(int t=0;t<180;t++){ //plot dello spazio dei parametri da 0° a 180° (sist. polare)
+      
+      float r = ( ((float)x - center_x) * cos((float)t * DEG2RAD)) + (((float)y - center_y) * sin((float)t * DEG2RAD));
+      
+      //dev_accu[ (int)((round(r + hough_h) * 180.0)) + t]++;
+      atomicAdd(&(dev_accu[ (int)((round(r + hough_h) * 180.0)) + t]), 1);
+      
+    }
+  }
+  
+  
+}
 
 namespace keymolen {
 
@@ -78,13 +119,48 @@ namespace keymolen {
 					for(int t=0;t<180;t++)
 					{
 						double r = ( ((double)x - center_x) * cos((double)t * DEG2RAD)) + (((double)y - center_y) * sin((double)t * DEG2RAD));
-						_accu[ (int)((round(r + hough_h) * 180.0)) + t]++;
+						_accu[ (int)((round(r + hough_h) * 180.0)) + t]++; 
 					}
 				}
 			}
 		}
 
 		return 0;
+	}
+	
+	int Hough::Transform_GPU(unsigned char* img_data, int w, int h){
+	  
+	  _img_w = w;
+	  _img_h = h;
+
+	  //Create the accu
+	  double hough_h = ((sqrt(2.0) * (double)(h>w?h:w)) / 2.0);
+	  _accu_h = hough_h * 2.0; // -r -> +r
+	  _accu_w = 180;
+	  _accu = (unsigned int*)calloc(_accu_h * _accu_w, sizeof(unsigned int));
+	  
+	  unsigned char *dev_img;
+	  unsigned int *dev_accu;
+	  
+	  checkCudaErrors(cudaMalloc((void **) &dev_img, (sizeof(char)*w*h)));
+	  checkCudaErrors(cudaMalloc((void **) &dev_accu, (sizeof(unsigned int) * _accu_w * _accu_h)));
+	  checkCudaErrors(cudaMemset(dev_accu, 0, (sizeof(unsigned int) * _accu_w * _accu_h)));
+	  
+	  //copy data on device
+	  checkCudaErrors(cudaMemcpy(dev_img, img_data, (sizeof(char)*w*h), cudaMemcpyHostToDevice));
+	  
+	  //launch kernel
+	  dim3 block(BLOCK_DIM, BLOCK_DIM);
+	  dim3 grid(SET_GRID_DIM(w,BLOCK_DIM), SET_GRID_DIM(h,BLOCK_DIM));
+	  
+	  CudaTransform <<< grid, block >>> (dev_img, dev_accu, w, h);
+	  
+	  //copy back results
+	  checkCudaErrors(cudaMemcpy(_accu, dev_accu, (sizeof(unsigned int) * _accu_w * _accu_h), cudaMemcpyDeviceToHost));
+	  
+	  cudaFree(dev_img);
+	  cudaFree(dev_accu);
+	  return 0;
 	}
 
 	std::vector< std::pair< std::pair<int, int>, std::pair<int, int> > > Hough::GetLines(int threshold)
