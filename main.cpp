@@ -142,7 +142,7 @@ void doTransform(std::string file_path, int threshold)
 	//Transform
 	keymolen::Hough hough;
 	
-	const int64 start = cv::getTickCount();
+	//const int64 start = cv::getTickCount();
 	
 	if(device == CPU_DEV){
 	  hough.Transform(img_edge.data, w, h);
@@ -150,8 +150,8 @@ void doTransform(std::string file_path, int threshold)
 	  hough.Transform_GPU(img_edge.data, w, h);
 	}
 	
-	const double timeSec = (cv::getTickCount() - start) / cv::getTickFrequency();
-        std::cout << device_arg << " Time : " << timeSec * 1000 << " ms" << std::endl;
+	//const double timeSec = (cv::getTickCount() - start) / cv::getTickFrequency();
+        //std::cout << device_arg << " Time : " << timeSec * 1000 << " ms" << std::endl;
 
 
 	if(threshold == 0)

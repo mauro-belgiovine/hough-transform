@@ -52,6 +52,28 @@
 using namespace std;
 
 /* CUDA functions definitions */
+
+// CUDA timer macros
+cudaEvent_t c_start, c_stop;
+
+inline void start_time() {
+    cudaEventCreate(&c_start);
+    cudaEventCreate(&c_stop);
+    cudaEventRecord(c_start, 0);
+}
+
+inline float stop_time(const char *msg) {
+  float elapsedTime = 0;
+  cudaEventRecord(c_stop, 0);
+  cudaEventSynchronize(c_stop);
+  cudaEventElapsedTime(&elapsedTime, c_start, c_stop);
+  //if ( VERBOSE )
+  printf("Time to %s: %.3f ms\n", msg, elapsedTime);
+  cudaEventDestroy(c_start);
+  cudaEventDestroy(c_stop);
+  return elapsedTime;
+}
+
 //every CUDA Thread works processes a point of the input image
 __global__ void CudaTransform(unsigned char* dev_img, unsigned int *dev_accu, int w, int h){
   
@@ -96,6 +118,8 @@ namespace keymolen {
 
 	int Hough::Transform(unsigned char* img_data, int w, int h)
 	{
+	  
+		
 		_img_w = w;
 		_img_h = h;
 
@@ -109,6 +133,7 @@ namespace keymolen {
 		double center_x = w/2;
 		double center_y = h/2;
 
+		start_time();
 
 		for(int y=0;y<h;y++)
 		{
@@ -124,11 +149,12 @@ namespace keymolen {
 				}
 			}
 		}
-
+		stop_time("CPU Transform");
 		return 0;
 	}
 	
 	int Hough::Transform_GPU(unsigned char* img_data, int w, int h){
+	  
 	  
 	  _img_w = w;
 	  _img_h = h;
@@ -142,6 +168,8 @@ namespace keymolen {
 	  unsigned char *dev_img;
 	  unsigned int *dev_accu;
 	  
+	  
+	  
 	  checkCudaErrors(cudaMalloc((void **) &dev_img, (sizeof(char)*w*h)));
 	  checkCudaErrors(cudaMalloc((void **) &dev_accu, (sizeof(unsigned int) * _accu_w * _accu_h)));
 	  checkCudaErrors(cudaMemset(dev_accu, 0, (sizeof(unsigned int) * _accu_w * _accu_h)));
@@ -149,11 +177,13 @@ namespace keymolen {
 	  //copy data on device
 	  checkCudaErrors(cudaMemcpy(dev_img, img_data, (sizeof(char)*w*h), cudaMemcpyHostToDevice));
 	  
+	  start_time();
 	  //launch kernel
 	  dim3 block(BLOCK_DIM, BLOCK_DIM);
 	  dim3 grid(SET_GRID_DIM(w,BLOCK_DIM), SET_GRID_DIM(h,BLOCK_DIM));
 	  
 	  CudaTransform <<< grid, block >>> (dev_img, dev_accu, w, h);
+	  stop_time("GPU Transform");
 	  
 	  //copy back results
 	  checkCudaErrors(cudaMemcpy(_accu, dev_accu, (sizeof(unsigned int) * _accu_w * _accu_h), cudaMemcpyDeviceToHost));
