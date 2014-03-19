@@ -177,11 +177,11 @@ namespace keymolen {
 	  //copy data on device
 	  checkCudaErrors(cudaMemcpy(dev_img, img_data, (sizeof(char)*w*h), cudaMemcpyHostToDevice));
 	  
-	  start_time();
+	  
 	  //launch kernel
 	  dim3 block(BLOCK_DIM, BLOCK_DIM);
 	  dim3 grid(SET_GRID_DIM(w,BLOCK_DIM), SET_GRID_DIM(h,BLOCK_DIM));
-	  
+	  start_time();
 	  CudaTransform <<< grid, block >>> (dev_img, dev_accu, w, h);
 	  stop_time("GPU Transform");
 	  
