@@ -1,14 +1,22 @@
 # (C)2013, Bruno Keymolen
 # http://www.keymolen.com
 # http://www.keymolen.com/2013/05/hough-transformation-c-implementation.html
+
+# *** Tweak this parameter to match your system configuration
+NVIDIA_SAMPLE_INC=/usr/local/cuda-5.5/samples/common/inc
+NVIDIA_ARCH=compute_20
+NVIDIA_SM=sm_21
+# ***
+
 CXX=g++
 CC=gcc
 NVCC=nvcc
 CPP11FLAG= -std=c++11
-OPTFLAGS=-g3 -ggdb -O0 -m64 $(CPP11FLAG)
-CXXFLAGS=-Wall -I. -I/usr/local/include $(OPTFLAGS) -I/usr/local/cuda-5.5/include -I/home/belgiovi/NVIDIA_CUDA-5.0_Samples/common/inc
+OPTFLAGS=-g3 -O0 -m64 $(CPP11FLAG) #-ggdb
+
+CXXFLAGS=-Wall -I. -I/usr/local/include $(OPTFLAGS) -I/usr/local/cuda-5.5/include -I$(NVIDIA_SAMPLE_INC)
 CFLAGS=-Wall $(OPTFLAGS)
-NVCCFLAGS=-I. -I/usr/local/include -I/usr/local/cuda-5.5/include -I/home/belgiovi/NVIDIA_CUDA-5.0_Samples/common/inc -gencode arch=compute_20,code=sm_21
+NVCCFLAGS=-I. -I/usr/local/include -I/usr/local/cuda-5.5/include -I$(NVIDIA_SAMPLE_INC) -gencode arch=$(NVIDIA_ARCH),code=$(NVIDIA_SM)
 LDFLAGS= -L/usr/local/lib 
 
 LDFLAGS+= -lopencv_highgui -lopencv_core -lopencv_calib3d -lopencv_features2d -lopencv_flann -lopencv_imgproc -lopencv_objdetect -lopencv_ts -lopencv_gpu
