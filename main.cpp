@@ -52,6 +52,7 @@ int threshold = 0;
 #define CPU_DEV 0
 #define GPU_DEV 1
 int device = CPU_DEV;
+std::string device_arg = "cpu";
 
 const char* CW_IMG_ORIGINAL = "Result";
 const char* CW_IMG_EDGE 	= "Canny Edge Detection";
@@ -75,7 +76,7 @@ void usage(char * s)
 int main(int argc, char** argv) {
 
 	int c;
-	std::string device_arg;
+	
 	
 	while ( ((c = getopt( argc, argv, "d:s:t:?" ) ) ) != -1 )
 	{
@@ -140,12 +141,17 @@ void doTransform(std::string file_path, int threshold)
 
 	//Transform
 	keymolen::Hough hough;
-	//TODO: controllare differenze in accumulatore?
+	
+	const int64 start = cv::getTickCount();
+	
 	if(device == CPU_DEV){
 	  hough.Transform(img_edge.data, w, h);
 	}else if(device == GPU_DEV){
 	  hough.Transform_GPU(img_edge.data, w, h);
 	}
+	
+	const double timeSec = (cv::getTickCount() - start) / cv::getTickFrequency();
+        std::cout << device_arg << " Time : " << timeSec * 1000 << " ms" << std::endl;
 
 
 	if(threshold == 0)

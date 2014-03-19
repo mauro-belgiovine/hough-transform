@@ -4,7 +4,8 @@
 CXX=g++
 CC=gcc
 NVCC=nvcc
-OPTFLAGS=-g3 -ggdb -O0 -std=c++11 -m64
+OPTFLAGS=-g3 -ggdb -O0 -m64
+CPP11FLAG= -std=c++11
 CXXFLAGS=-Wall -I. -I/usr/local/include $(OPTFLAGS) -I/usr/local/cuda-5.5/include -I/home/belgiovi/NVIDIA_CUDA-5.0_Samples/common/inc
 CFLAGS=-Wall $(OPTFLAGS)
 NVCCFLAGS=-I. -I/usr/local/include -I/usr/local/cuda-5.5/include -I/home/belgiovi/NVIDIA_CUDA-5.0_Samples/common/inc -gencode arch=compute_20,code=sm_21
