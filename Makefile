@@ -53,10 +53,10 @@ hough_circle: $(SRC_SOURCE_CIRCLE)
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 %.o: %.cpp %.h
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CPP11FLAG) $(CXXFLAGS) -c -o $@ $<
 
 %.o: %.cpp
-	$(CXX) $(CXXFLAGS) -c -o $@ $<
+	$(CXX) $(CPP11FLAG) $(CXXFLAGS) -c -o $@ $<
 
 %.o: %.cu %.h
 	$(NVCC) $(NVCCFLAGS) -c -o $@ $<
