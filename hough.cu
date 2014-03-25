@@ -93,6 +93,9 @@ The slow case:
 
 FROM -> http://on-demand.gputechconf.com/gtc-express/2011/presentations/NVIDIA_GPU_Computing_Webinars_CUDA_Memory_Optimization.pdf
 
+TODO: provare a raddoppiare la dimensione del blocco (64) utilizzando 2 diverse __shared__ memory per contare i pixel,
+in modo da garantire accesso a 1 warp alla volta ("broadcast") per evitare bank-conflict
+
 PSEUDO CODE:
 1 pixel_value = image[x,y]
 2 if(pixel_value > threshold) {
@@ -113,11 +116,6 @@ __global__ void getPixels(unsigned char* dev_img, unsigned int *dev_globalPixelA
   __shared__ unsigned int sh_pixel_count;
   __shared__ unsigned int sh_pixel_array[BLOCK_DIM*BLOCK_DIM];
   
-  //__shared__ unsigned int sh_entered[BLOCK_DIM*BLOCK_DIM];
-  
-  
-  //sh_entered[(threadIdx.y * blockDim.x) + threadIdx.x] = 0;
-  
   unsigned int blockIndex = (threadIdx.y * blockDim.x) + threadIdx.x;
   
   if(blockIndex == 0) sh_pixel_count = 0;
@@ -128,7 +126,6 @@ __global__ void getPixels(unsigned char* dev_img, unsigned int *dev_globalPixelA
     
     if( dev_img[index] > 250 ){ //se il punto è bianco (val in scala di grigio > 250)
       
-      //sh_entered[(threadIdx.y * blockDim.x) + threadIdx.x] += 1;
       
       do{
 	pixel_count++;
@@ -148,15 +145,7 @@ __global__ void getPixels(unsigned char* dev_img, unsigned int *dev_globalPixelA
   //First one thread in each thread block
   if((threadIdx.x == 0) && (threadIdx.y == 0)){
     //add the sum of all pixels collected in this thread-block
-    dev_globalPixelCount[blockId] = pixel_count;
-    
-    /*for(unsigned int x = 0; x < BLOCK_DIM; x++){ //loop on threadIdx.x
-      for(unsigned int y = 0; y < BLOCK_DIM; y++){ //loop on threadIdx.y
-	dev_globalPixelCount[blockId] += sh_entered[(y * blockDim.x) + x];
-      }
-    }*/
-    
-    
+    dev_globalPixelCount[blockId] = pixel_count;    
     
     //copy in the global array each pixel to be processed
     /*for(unsigned int i = 0; i < pixel_count; i++){
