@@ -43,11 +43,12 @@
 #include <helper_cuda.h>
 #include <helper_functions.h> // helper utility functions 
 
-
 #define DEG2RAD 0.017453293f
 
+#define SHARED_MEM_BANKS 32
 #define SET_GRID_DIM(npoints, threadsPerBlock) ceil((npoints+(threadsPerBlock-1))/threadsPerBlock)
-#define BLOCK_DIM 4
+#define BLOCK_DIM 8
+#define BLOCK_DIM_Y (SHARED_MEM_BANKS/BLOCK_DIM)
 
 using namespace std;
 
@@ -79,7 +80,7 @@ inline float stop_time(const char *msg) {
 
 NOTE: dovendo accedere allo stesso indirizzo di memoria __shared__, dobbiamo garantire un accesso
 privo di bank-conflict, per evitare perdita di informazioni dovute all'accesso concorrente: 
-per la memoria __shared__, ciò è garantito solo per mezzo-warp (32/2 = 16 thread) che accede allo stesso bank (32 bit) di memoria
+per la memoria __shared__, ciò è garantito solo in un warp (32 thread) per device 2.x (16 thread per 1.x) che accede allo stesso bank (32 bit) di memoria
 grazie alle primitive di "broadcast"
 
 The fast case:
@@ -90,7 +91,7 @@ The slow case:
 - Must serialize the accesses
 - Cost = max # of simultaneous accesses to a single bank
 
-http://on-demand.gputechconf.com/gtc-express/2011/presentations/NVIDIA_GPU_Computing_Webinars_CUDA_Memory_Optimization.pdf
+FROM -> http://on-demand.gputechconf.com/gtc-express/2011/presentations/NVIDIA_GPU_Computing_Webinars_CUDA_Memory_Optimization.pdf
 
 PSEUDO CODE:
 1 pixel_value = image[x,y]
@@ -282,8 +283,8 @@ namespace keymolen {
 	  
 	  
 	  //launch kernel
-	  dim3 block(BLOCK_DIM, BLOCK_DIM);
-	  dim3 grid(SET_GRID_DIM(w,BLOCK_DIM), SET_GRID_DIM(h,BLOCK_DIM));
+	  dim3 block(BLOCK_DIM, 4);
+	  dim3 grid(SET_GRID_DIM(w,BLOCK_DIM), SET_GRID_DIM(h,4));
 	  start_time();
 	  CudaTransform <<< grid, block >>> (dev_img, dev_accu, w, h);
 	  stop_time("GPU Transform");
@@ -316,21 +317,21 @@ namespace keymolen {
 	  checkCudaErrors(cudaMemcpy(dev_img, img_data, (sizeof(char)*w*h), cudaMemcpyHostToDevice));
 	  
 	  checkCudaErrors(cudaMalloc((void **) &dev_globalPixelArray, (sizeof(unsigned int) * w * h)));
-	  checkCudaErrors(cudaMalloc((void **) &dev_globalPixelCount, (sizeof(unsigned int) * SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM))));
-	  checkCudaErrors(cudaMemset(dev_globalPixelCount, 0 , (sizeof(unsigned int) * SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM))));
+	  checkCudaErrors(cudaMalloc((void **) &dev_globalPixelCount, (sizeof(unsigned int) * SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM_Y))));
+	  checkCudaErrors(cudaMemset(dev_globalPixelCount, 0 , (sizeof(unsigned int) * SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM_Y))));
 	  
-	  dim3 block(BLOCK_DIM, BLOCK_DIM);
-	  dim3 grid(SET_GRID_DIM(w,BLOCK_DIM), SET_GRID_DIM(h,BLOCK_DIM));
+	  dim3 block(BLOCK_DIM, BLOCK_DIM_Y);
+	  dim3 grid(SET_GRID_DIM(w,BLOCK_DIM), SET_GRID_DIM(h,BLOCK_DIM_Y));
 	  
 	  start_time();
 	  getPixels <<<grid, block>>> (dev_img, dev_globalPixelArray, dev_globalPixelCount, w, h);
 	  stop_time("Fast GPU Transform");
 	  
-	  unsigned int *PixelCount = (unsigned int *) malloc(sizeof(unsigned int) * SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM));
-	  checkCudaErrors(cudaMemcpy(PixelCount, dev_globalPixelCount, (sizeof(unsigned int) * SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM)), cudaMemcpyDeviceToHost));
+	  unsigned int *PixelCount = (unsigned int *) malloc(sizeof(unsigned int) * SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM_Y));
+	  checkCudaErrors(cudaMemcpy(PixelCount, dev_globalPixelCount, (sizeof(unsigned int) * SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM_Y)), cudaMemcpyDeviceToHost));
 
 	  unsigned int total_pix = 0;
-	  for(unsigned int i = 0; i < (SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM)); i++){
+	  for(unsigned int i = 0; i < (SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM_Y)); i++){
 	    cout << "block ID " << i << "=" << PixelCount[i] << " ";
 	    total_pix += PixelCount[i];
 	    if ((i % 5 ) == 0){
