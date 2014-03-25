@@ -46,8 +46,8 @@
 
 #define DEG2RAD 0.017453293f
 
-#define SET_GRID_DIM(npoints, threadsPerBlock) ((npoints+(threadsPerBlock-1))/threadsPerBlock)
-#define BLOCK_DIM 16
+#define SET_GRID_DIM(npoints, threadsPerBlock) ceil((npoints+(threadsPerBlock-1))/threadsPerBlock)
+#define BLOCK_DIM 4
 
 using namespace std;
 
@@ -73,6 +73,99 @@ inline float stop_time(const char *msg) {
   cudaEventDestroy(c_stop);
   return elapsedTime;
 }
+
+
+/* getPixels(): kernel used to making an array of all pixels that need to be processed
+
+NOTE: dovendo accedere allo stesso indirizzo di memoria __shared__, dobbiamo garantire un accesso
+privo di bank-conflict, per evitare perdita di informazioni dovute all'accesso concorrente: 
+per la memoria __shared__, ciò è garantito solo per mezzo-warp (32/2 = 16 thread) che accede allo stesso bank (32 bit) di memoria
+grazie alle primitive di "broadcast"
+
+The fast case:
+- If all threads of a half-warp access different banks, there is no bank conflict
+- ** If all threads of a half-warp read the identical address, there is no bank conflict (broadcast) **
+The slow case:
+- Bank Conflict: multiple threads in the same half-warp access the same bank
+- Must serialize the accesses
+- Cost = max # of simultaneous accesses to a single bank
+
+http://on-demand.gputechconf.com/gtc-express/2011/presentations/NVIDIA_GPU_Computing_Webinars_CUDA_Memory_Optimization.pdf
+
+PSEUDO CODE:
+1 pixel_value = image[x,y]
+2 if(pixel_value > threshold) {
+3 	do {
+4 		index++
+5 		SMEM_index = index
+6 		SMEM_array[index] = (x,y)
+7 	} while(SMEM_array[index] != (x,y))
+8 }
+9 index = SMEM_index
+*/
+
+__global__ void getPixels(unsigned char* dev_img, unsigned int *dev_globalPixelArray, unsigned int *dev_globalPixelCount,  int w, int h){
+  
+  //calculate index which this thread have to process
+  unsigned int index = getGlobalIdx_2D_2D();
+  unsigned int pixel_count = 0;
+  __shared__ unsigned int sh_pixel_count;
+  __shared__ unsigned int sh_pixel_array[BLOCK_DIM*BLOCK_DIM];
+  
+  //__shared__ unsigned int sh_entered[BLOCK_DIM*BLOCK_DIM];
+  
+  
+  //sh_entered[(threadIdx.y * blockDim.x) + threadIdx.x] = 0;
+  
+  unsigned int blockIndex = (threadIdx.y * blockDim.x) + threadIdx.x;
+  
+  if(blockIndex == 0) sh_pixel_count = 0;
+  
+  
+  //check index is in image bounds
+  if(index < (w*h)){
+    
+    if( dev_img[index] > 250 ){ //se il punto è bianco (val in scala di grigio > 250)
+      
+      //sh_entered[(threadIdx.y * blockDim.x) + threadIdx.x] += 1;
+      
+      do{
+	pixel_count++;
+	sh_pixel_count = pixel_count;
+	sh_pixel_array[pixel_count] = index;
+	__syncthreads();
+      }while(sh_pixel_array[pixel_count] != index );
+    }
+    
+    pixel_count = sh_pixel_count;
+  }
+  
+ 
+  
+  unsigned int blockId = (blockIdx.y * gridDim.x) + blockIdx.x;
+  
+  //First one thread in each thread block
+  if((threadIdx.x == 0) && (threadIdx.y == 0)){
+    //add the sum of all pixels collected in this thread-block
+    dev_globalPixelCount[blockId] = pixel_count;
+    
+    /*for(unsigned int x = 0; x < BLOCK_DIM; x++){ //loop on threadIdx.x
+      for(unsigned int y = 0; y < BLOCK_DIM; y++){ //loop on threadIdx.y
+	dev_globalPixelCount[blockId] += sh_entered[(y * blockDim.x) + x];
+      }
+    }*/
+    
+    
+    
+    //copy in the global array each pixel to be processed
+    /*for(unsigned int i = 0; i < pixel_count; i++){
+      dev_globalPixelArray[i] = sh_pixel_array[i]; // <--------- TODO: trovare modo efficiente per salvare la lista dei punti da processare
+    }*/
+  }
+}
+
+
+
 
 //every CUDA Thread works processes a point of the input image
 __global__ void CudaTransform(unsigned char* dev_img, unsigned int *dev_accu, int w, int h){
@@ -138,6 +231,8 @@ namespace keymolen {
 		double center_y = h/2;
 
 		start_time();
+		
+		unsigned int total_processed_pixels = 0;
 
 		for(int y=0;y<h;y++)
 		{
@@ -145,6 +240,7 @@ namespace keymolen {
 			{
 				if( img_data[ (y*w) + x] > 250 )
 				{
+				  total_processed_pixels++;
 					for(int t=0;t<180;t++)
 					{
 						double r = ( ((double)x - center_x) * cos((double)t * DEG2RAD)) + (((double)y - center_y) * sin((double)t * DEG2RAD));
@@ -153,6 +249,9 @@ namespace keymolen {
 				}
 			}
 		}
+		
+		cout << "Total processed pixels " << total_processed_pixels << endl;
+		
 		stop_time("CPU Transform");
 		return 0;
 	}
@@ -194,6 +293,52 @@ namespace keymolen {
 	  
 	  cudaFree(dev_img);
 	  cudaFree(dev_accu);
+	  return 0;
+	}
+	
+	int Hough::Transform_GPUFast(unsigned char* img_data, int w, int h){
+	  
+	  _img_w = w;
+	  _img_h = h;
+
+	  //Create the accu
+	  double hough_h = ((sqrt(2.0) * (double)(h>w?h:w)) / 2.0);
+	  _accu_h = hough_h * 2.0; // -r -> +r
+	  _accu_w = 180;
+	  _accu = (unsigned int*)calloc(_accu_h * _accu_w, sizeof(unsigned int));
+	  
+	  unsigned char *dev_img;
+	  unsigned int *dev_globalPixelArray;	//it will contain only pixels that have to be processed
+	  unsigned int *dev_globalPixelCount;	//it will hold number of pixels that have to be processed per each thread-BLOCK
+	  
+	  checkCudaErrors(cudaMalloc((void **) &dev_img, (sizeof(char) * w * h)));
+	  //copy data on device
+	  checkCudaErrors(cudaMemcpy(dev_img, img_data, (sizeof(char)*w*h), cudaMemcpyHostToDevice));
+	  
+	  checkCudaErrors(cudaMalloc((void **) &dev_globalPixelArray, (sizeof(unsigned int) * w * h)));
+	  checkCudaErrors(cudaMalloc((void **) &dev_globalPixelCount, (sizeof(unsigned int) * SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM))));
+	  checkCudaErrors(cudaMemset(dev_globalPixelCount, 0 , (sizeof(unsigned int) * SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM))));
+	  
+	  dim3 block(BLOCK_DIM, BLOCK_DIM);
+	  dim3 grid(SET_GRID_DIM(w,BLOCK_DIM), SET_GRID_DIM(h,BLOCK_DIM));
+	  
+	  start_time();
+	  getPixels <<<grid, block>>> (dev_img, dev_globalPixelArray, dev_globalPixelCount, w, h);
+	  stop_time("Fast GPU Transform");
+	  
+	  unsigned int *PixelCount = (unsigned int *) malloc(sizeof(unsigned int) * SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM));
+	  checkCudaErrors(cudaMemcpy(PixelCount, dev_globalPixelCount, (sizeof(unsigned int) * SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM)), cudaMemcpyDeviceToHost));
+
+	  unsigned int total_pix = 0;
+	  for(unsigned int i = 0; i < (SET_GRID_DIM(w,BLOCK_DIM) * SET_GRID_DIM(h,BLOCK_DIM)); i++){
+	    cout << "block ID " << i << "=" << PixelCount[i] << " ";
+	    total_pix += PixelCount[i];
+	    if ((i % 5 ) == 0){
+	      cout << endl;
+	    }
+	  }
+	  cout << "total pixels " << total_pix << endl;
+	  
 	  return 0;
 	}
 
@@ -256,7 +401,7 @@ namespace keymolen {
 			}
 		}
 
-		std::cout << "lines: " << lines.size() << " " << threshold << std::endl;
+		std::cout << "lines: " << lines.size() << " " << threshold << "; img dim: w=" << _img_w << " h=" << _img_h << std::endl;
 		return lines;
 	}
 

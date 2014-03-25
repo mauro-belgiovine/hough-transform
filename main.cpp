@@ -147,7 +147,7 @@ void doTransform(std::string file_path, int threshold)
 	if(device == CPU_DEV){
 	  hough.Transform(img_edge.data, w, h);
 	}else if(device == GPU_DEV){
-	  hough.Transform_GPU(img_edge.data, w, h);
+	  hough.Transform_GPUFast(img_edge.data, w, h);
 	}
 	
 	//const double timeSec = (cv::getTickCount() - start) / cv::getTickFrequency();

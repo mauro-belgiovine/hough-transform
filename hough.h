@@ -46,6 +46,7 @@ namespace keymolen {
 	public:
 		int Transform(unsigned char* img_data, int w, int h);
 		int Transform_GPU(unsigned char* img_data, int w, int h);
+		int Transform_GPUFast(unsigned char* img_data, int w, int h);
 		std::vector< std::pair< std::pair<int, int>, std::pair<int, int> > > GetLines(int threshold);
 		const unsigned int* GetAccu(int *w, int *h);
 	private:
