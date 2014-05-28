@@ -42,8 +42,8 @@ using namespace std;
 #define ac_soglia 4 // soglia nella matrice di accumulazione
 
 //#define PARALLEL_REDUX_MAX
-
-#define VERBOSE_DUMP
+//#define VERBOSE_DUMP
+#define CUDA_MALLOCHOST_OUTPUT
 
 #define max_tracks_out 100
 
@@ -69,7 +69,10 @@ struct track_param{
       unsigned int irho;*/
     };
     
-//struct track_param host_out_tracks[ Nsec * Ntheta * Nphi * Nrho ];
+#ifndef CUDA_MALLOCHOST_OUTPUT
+struct track_param host_out_tracks[ Nsec * Ntheta * Nphi * Nrho ];
+#endif
+
 #endif
 //lock definition
 
@@ -436,17 +439,19 @@ int main(int argc, char* argv[]){
       unsigned int maxThreadsPerBlock = deviceProp.maxThreadsPerBlock;
 
 #ifndef PARALLEL_REDUX_MAX
-            
+   
+#ifdef CUDA_MALLOCHOST_OUTPUT
       struct track_param *host_out_tracks;
-      
-      checkCudaErrors(cudaMallocHost((void **) &host_out_tracks, (sizeof(struct track_param)*(Nsec * Ntheta * Nphi * Nrho))));
-      
+#endif
       struct track_param *dev_indexOutput;
       Lock my_lock;
       
       unsigned int *NMrel;
       
       start_time();
+#ifdef CUDA_MALLOCHOST_OUTPUT
+      checkCudaErrors(cudaMallocHost((void **) &host_out_tracks, (sizeof(struct track_param)*(Nsec * Ntheta * Nphi * Nrho))));
+#endif   
       checkCudaErrors(cudaMalloc((void **) &NMrel, (sizeof(unsigned int))));
       checkCudaErrors(cudaMemset(NMrel, 0, sizeof(unsigned int)));
       checkCudaErrors(cudaMalloc((void **) &dev_indexOutput, (sizeof(struct track_param)* (Nsec * Ntheta * Nphi * Nrho)) ));
@@ -488,6 +493,7 @@ int main(int argc, char* argv[]){
       //free mem
       checkCudaErrors(cudaFree(dev_indexOutput));
       checkCudaErrors(cudaFree(NMrel));
+      checkCudaErrors(cudaFreeHost(host_out_tracks));
       
       //print timing results with this format:
       // NHIT HtoD_input MEMSET_cumulative VOTE MAX_REL DtoH_output
