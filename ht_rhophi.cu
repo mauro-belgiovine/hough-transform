@@ -43,7 +43,7 @@ using namespace std;
 
 //#define PARALLEL_REDUX_MAX
 //#define VERBOSE_DUMP
-#define CUDA_MALLOCHOST_OUTPUT
+//#define CUDA_MALLOCHOST_OUTPUT
 
 #define max_tracks_out 100
 
@@ -473,7 +473,11 @@ int main(int argc, char* argv[]){
       timing[3] = stop_time("Max. Relative");
       
       start_time();
+#ifdef CUDA_MALLOCHOST_OUTPUT
       checkCudaErrors(cudaMemcpy((void *) host_out_tracks, dev_indexOutput, (sizeof(int)* (Nsec * Ntheta * Nphi * Nrho)), cudaMemcpyDeviceToHost));
+#else
+      checkCudaErrors(cudaMemcpy((void *) &host_out_tracks, dev_indexOutput, (sizeof(int)* (Nsec * Ntheta * Nphi * Nrho)), cudaMemcpyDeviceToHost));
+#endif
       checkCudaErrors(cudaMemcpy((void *) &host_NMrel, NMrel, (sizeof(int)), cudaMemcpyDeviceToHost));
       timing[4] = stop_time("Copy results DtoH");
 
@@ -493,8 +497,9 @@ int main(int argc, char* argv[]){
       //free mem
       checkCudaErrors(cudaFree(dev_indexOutput));
       checkCudaErrors(cudaFree(NMrel));
+#ifdef CUDA_MALLOCHOST_OUTPUT      
       checkCudaErrors(cudaFreeHost(host_out_tracks));
-      
+#endif
       //print timing results with this format:
       // NHIT HtoD_input MEMSET_cumulative VOTE MAX_REL DtoH_output
       cout << N_HITS << " " << timing[0] << " " << timing[1] << " " << timing[2] << " " << timing[3] << " " << timing[4] << endl; 
