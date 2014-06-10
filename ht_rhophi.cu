@@ -462,7 +462,7 @@ int main(int argc, char* argv[]){
 #ifdef CUDA_MANAGED_TRANSFER
       int cudaVer = 0;
       cudaRuntimeGetVersion(&cudaVer);
-      if(cudaVer > 6000){
+      if(cudaVer >= 6000){
 	checkCudaErrors(cudaMallocManaged(&dev_indexOutput,(sizeof(struct track_param)* (Nsec * Ntheta * Nphi * Nrho)) ));
       }else{
 #endif
