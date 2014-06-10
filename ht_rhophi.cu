@@ -43,7 +43,7 @@ using namespace std;
 
 /* --- DEFINE TO ALTER EXECUTION --- */
 //#define PARALLEL_REDUX_MAX
-//#define VERBOSE_DUMP
+#define VERBOSE_DUMP
 #define CUDA_MALLOCHOST_OUTPUT
 #define CUDA_MANAGED_TRANSFER
 
@@ -492,10 +492,15 @@ int main(int argc, char* argv[]){
       timing[3] = stop_time("Max. Relative");
       
       start_time();
+      
+#ifndef CUDA_MANAGED_TRANSFER
+      
 #ifdef CUDA_MALLOCHOST_OUTPUT
       checkCudaErrors(cudaMemcpy((void *) host_out_tracks, dev_indexOutput, (sizeof(int)* (Nsec * Ntheta * Nphi * Nrho)), cudaMemcpyDeviceToHost));
 #else
       checkCudaErrors(cudaMemcpy((void *) &host_out_tracks, dev_indexOutput, (sizeof(int)* (Nsec * Ntheta * Nphi * Nrho)), cudaMemcpyDeviceToHost));
+#endif
+      
 #endif
       checkCudaErrors(cudaMemcpy((void *) &host_NMrel, NMrel, (sizeof(int)), cudaMemcpyDeviceToHost));
       timing[4] = stop_time("Copy results DtoH");
@@ -506,13 +511,22 @@ int main(int argc, char* argv[]){
       unsigned int ntracks = 0;
       
       for(unsigned int i = 0; ((i < (Nsec * Ntheta * Nphi * Nrho)) && (ntracks < host_NMrel)); i++){
-	
+#ifndef CUDA_MANAGED_TRANSFER	
 	if(host_out_tracks[i].acc > -1){
-	  cout << "track " << ntracks << " acc value = " << host_out_tracks[i].acc << " [" << i << "]" << endl;
+	  cout << "track " << ntracks << " host_out_tracks value = " << host_out_tracks[i].acc << " [" << i << "]" << endl;
+	  ntracks++; 
+	}
+#else
+	if(dev_indexOutput[i].acc > -1){
+
+	  cout << "track " << ntracks << " dev_indexOutput value = " << dev_indexOutput[i].acc << " [" << i << "]" << endl;
 	  ntracks++;    
 	}
+#endif
       }
 #endif
+
+
       //free mem
       checkCudaErrors(cudaFree(dev_indexOutput));
       checkCudaErrors(cudaFree(NMrel));
