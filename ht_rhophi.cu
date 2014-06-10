@@ -41,9 +41,11 @@ using namespace std;
 
 #define ac_soglia 4 // soglia nella matrice di accumulazione
 
+/* --- DEFINE TO ALTER EXECUTION --- */
 //#define PARALLEL_REDUX_MAX
 //#define VERBOSE_DUMP
-//#define CUDA_MALLOCHOST_OUTPUT
+#define CUDA_MALLOCHOST_OUTPUT
+#define CUDA_MANAGED_TRANSFER
 
 #define max_tracks_out 100
 
@@ -74,8 +76,8 @@ struct track_param host_out_tracks[ Nsec * Ntheta * Nphi * Nrho ];
 #endif
 
 #endif
-//lock definition
 
+//lock definition
 #ifndef __LOCK_H__
 #define __LOCK_H__
 
@@ -312,6 +314,14 @@ int main(int argc, char* argv[]){
     
     cudaDeviceProp deviceProp;
     cudaGetDeviceProperties(&deviceProp, 0);
+    
+#ifdef CUDA_MALLOCHOST_OUTPUT
+      struct track_param *host_out_tracks;
+      start_time();
+      checkCudaErrors(cudaMallocHost((void **) &host_out_tracks, (sizeof(struct track_param)*(Nsec * Ntheta * Nphi * Nrho))));
+      float init_outputMatrix = stop_time("init output matrix with cudaMallocHost");
+      cout << "time to init output matrix (once): " << init_outputMatrix << endl;
+#endif
   
     int *dev_accMat;
     float *dev_x_values;
@@ -363,7 +373,7 @@ int main(int argc, char* argv[]){
       timing[0] = stop_time("Input malloc and copy HtoD");
       
       start_time();
-      voteHoughSpace <<<x_values.size(), Nphi>>> (dev_x_values, dev_y_values, dev_z_values, dev_accMat, dtheta, drho, dphi);
+      voteHoughSpace <<<x_values.size(), Nphi>>> (dev_x_values, dev_y_values, dev_z_values, dev_accMat, dtheta, drho, dphi); //assumes that Nphi == Nrho
       timing[2] = stop_time("Vote");
 #ifdef VERBOSE_DUMP     
       checkCudaErrors(cudaMemcpy((void *) &debug_accMat, dev_accMat, (sizeof(int)*(Nsec*Ntheta*Nphi*Nrho)), cudaMemcpyDeviceToHost));
@@ -439,23 +449,32 @@ int main(int argc, char* argv[]){
       unsigned int maxThreadsPerBlock = deviceProp.maxThreadsPerBlock;
 
 #ifndef PARALLEL_REDUX_MAX
-   
-#ifdef CUDA_MALLOCHOST_OUTPUT
-      struct track_param *host_out_tracks;
-#endif
+      
       struct track_param *dev_indexOutput;
       Lock my_lock;
       
       unsigned int *NMrel;
       
-      start_time();
-#ifdef CUDA_MALLOCHOST_OUTPUT
-      checkCudaErrors(cudaMallocHost((void **) &host_out_tracks, (sizeof(struct track_param)*(Nsec * Ntheta * Nphi * Nrho))));
-#endif   
+      start_time();   
       checkCudaErrors(cudaMalloc((void **) &NMrel, (sizeof(unsigned int))));
       checkCudaErrors(cudaMemset(NMrel, 0, sizeof(unsigned int)));
+      
+#ifdef CUDA_MANAGED_TRANSFER
+      int cudaVer = 0;
+      cudaRuntimeGetVersion(&cudaVer);
+      if(cudaVer > 6000){
+	checkCudaErrors(cudaMallocManaged(&dev_indexOutput,(sizeof(struct track_param)* (Nsec * Ntheta * Nphi * Nrho)) ));
+      }else{
+#endif
+	
       checkCudaErrors(cudaMalloc((void **) &dev_indexOutput, (sizeof(struct track_param)* (Nsec * Ntheta * Nphi * Nrho)) ));
+      
+#ifdef CUDA_MANAGED_TRANSFER
+      }
+#endif
+      
       checkCudaErrors(cudaMemset(dev_indexOutput, -1, (sizeof(struct track_param)* (Nsec * Ntheta * Nphi * Nrho))));
+      
       timing[1] += stop_time("malloc dev_indexOutput+NMrel and memset");
       
       // dividiamo adeguatamente il lavoro
@@ -497,9 +516,7 @@ int main(int argc, char* argv[]){
       //free mem
       checkCudaErrors(cudaFree(dev_indexOutput));
       checkCudaErrors(cudaFree(NMrel));
-#ifdef CUDA_MALLOCHOST_OUTPUT      
-      checkCudaErrors(cudaFreeHost(host_out_tracks));
-#endif
+
       //print timing results with this format:
       // NHIT HtoD_input MEMSET_cumulative VOTE MAX_REL DtoH_output
       cout << N_HITS << " " << timing[0] << " " << timing[1] << " " << timing[2] << " " << timing[3] << " " << timing[4] << endl; 
@@ -632,7 +649,12 @@ int main(int argc, char* argv[]){
 #endif
       checkCudaErrors(cudaFree(dev_accMat));
       
+      
   }
+  
+#ifdef CUDA_MALLOCHOST_OUTPUT      
+  checkCudaErrors(cudaFreeHost(host_out_tracks));
+#endif
     
     return 0;
 }
