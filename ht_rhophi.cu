@@ -2,7 +2,7 @@
 //  ht_helix.cpp
 //  
 //
-//  Created by Lorenzo Rinaldi on 29/04/14.
+//  Created by Lorenzo Rinaldi and Mauro Belgiovine on 29/04/14.
 //
 //
 // compile:
@@ -43,7 +43,7 @@ using namespace std;
 
 /* --- DEFINE TO ALTER EXECUTION --- */
 //#define PARALLEL_REDUX_MAX
-#define VERBOSE_DUMP
+//#define VERBOSE_DUMP
 #define CUDA_MALLOCHOST_OUTPUT
 #define CUDA_MANAGED_TRANSFER
 
@@ -315,13 +315,20 @@ int main(int argc, char* argv[]){
     cudaDeviceProp deviceProp;
     cudaGetDeviceProperties(&deviceProp, 0);
     
+#ifndef CUDA_MANAGED_TRANSFER
+    struct track_param *host_out_tracks;
+    start_time();
+
 #ifdef CUDA_MALLOCHOST_OUTPUT
-      struct track_param *host_out_tracks;
-      start_time();
       checkCudaErrors(cudaMallocHost((void **) &host_out_tracks, (sizeof(struct track_param)*(Nsec * Ntheta * Nphi * Nrho))));
-      float init_outputMatrix = stop_time("init output matrix with cudaMallocHost");
-      cout << "time to init output matrix (once): " << init_outputMatrix << endl;
+#else
+      host_out_tracks = malloc(sizeof(struct track_param)*(Nsec * Ntheta * Nphi * Nrho));
 #endif
+
+#endif
+
+    float init_outputMatrix = stop_time("init output matrix with cudaMallocHost");
+    cout << "time to init output matrix (once): " << init_outputMatrix << endl;
   
     int *dev_accMat;
     float *dev_x_values;
@@ -353,55 +360,82 @@ int main(int argc, char* argv[]){
       read_inputFile("hits-5000.txt", N_HITS);
   //    read_inputFile("../datafiles/hits-1.txt");
       
-      x_values_temp = (float*) malloc(sizeof(float)*x_values.size());
-      y_values_temp =  (float*) malloc(sizeof(float)*y_values.size());
-      z_values_temp = (float*)  malloc( sizeof(float)*z_values.size());
+#ifdef CUDA_MANAGED_TRANSFER
+
+      int cudaVer = 0;
+      cudaRuntimeGetVersion(&cudaVer);
+      if(cudaVer >= 6000){
+
+    	  start_time();
+    	  checkCudaErrors(cudaMallocManaged(&dev_x_values,sizeof(float)*x_values.size()));
+    	  checkCudaErrors(cudaMallocManaged(&dev_y_values,sizeof(float)*y_values.size()));
+    	  checkCudaErrors(cudaMallocManaged(&dev_z_values,sizeof(float)*z_values.size()));
+
+    	  for(unsigned int i = 0; i < x_values.size(); i++){
+    		  dev_x_values[i] = x_values.at(i);
+    		  dev_y_values[i] = y_values.at(i);
+    		  dev_z_values[i] = z_values.at(i);
+    	  }
+    	  timing[0] = stop_time("Input malloc and copy HtoD");
+
+      }else{
+#endif
+
+		  start_time();
+		  x_values_temp = (float*) malloc(sizeof(float)*x_values.size());
+		  y_values_temp =  (float*) malloc(sizeof(float)*y_values.size());
+		  z_values_temp = (float*)  malloc( sizeof(float)*z_values.size());
+
+		  for(unsigned int i = 0; i < x_values.size(); i++){
+		  			x_values_temp[i] = x_values.at(i);
+		  			y_values_temp[i] = y_values.at(i);
+		  			z_values_temp[i] = z_values.at(i);
+		  }
+
+		  checkCudaErrors(cudaMalloc((void **) &dev_x_values, sizeof(float)*x_values.size()));
+		  checkCudaErrors(cudaMalloc((void **) &dev_y_values, sizeof(float)*y_values.size()));
+		  checkCudaErrors(cudaMalloc((void **) &dev_z_values, sizeof(float)*z_values.size()));
+		  checkCudaErrors(cudaMemcpy(dev_x_values, x_values_temp, sizeof(float)*x_values.size(), cudaMemcpyHostToDevice));
+		  checkCudaErrors(cudaMemcpy(dev_y_values, y_values_temp, sizeof(float)*y_values.size(), cudaMemcpyHostToDevice));
+		  checkCudaErrors(cudaMemcpy(dev_z_values, z_values_temp, sizeof(float)*z_values.size(), cudaMemcpyHostToDevice));
+		  timing[0] = stop_time("Input malloc and copy HtoD");
       
-      for(unsigned int i = 0; i < x_values.size(); i++){
-	x_values_temp[i] = x_values.at(i);
-	y_values_temp[i] = y_values.at(i);
-	z_values_temp[i] = z_values.at(i);
+#ifdef CUDA_MANAGED_TRANSFER
       }
-      
-      start_time();
-      checkCudaErrors(cudaMalloc((void **) &dev_x_values, sizeof(float)*x_values.size()));
-      checkCudaErrors(cudaMalloc((void **) &dev_y_values, sizeof(float)*y_values.size()));
-      checkCudaErrors(cudaMalloc((void **) &dev_z_values, sizeof(float)*z_values.size()));
-      checkCudaErrors(cudaMemcpy(dev_x_values, x_values_temp, sizeof(float)*x_values.size(), cudaMemcpyHostToDevice));
-      checkCudaErrors(cudaMemcpy(dev_y_values, y_values_temp, sizeof(float)*y_values.size(), cudaMemcpyHostToDevice));
-      checkCudaErrors(cudaMemcpy(dev_z_values, z_values_temp, sizeof(float)*z_values.size(), cudaMemcpyHostToDevice));
-      timing[0] = stop_time("Input malloc and copy HtoD");
-      
+#endif
+
       start_time();
       voteHoughSpace <<<x_values.size(), Nphi>>> (dev_x_values, dev_y_values, dev_z_values, dev_accMat, dtheta, drho, dphi); //assumes that Nphi == Nrho
       timing[2] = stop_time("Vote");
 #ifdef VERBOSE_DUMP     
       checkCudaErrors(cudaMemcpy((void *) &debug_accMat, dev_accMat, (sizeof(int)*(Nsec*Ntheta*Nphi*Nrho)), cudaMemcpyDeviceToHost));
 #endif
+
+      //CPU execution
       for(unsigned int i = 0; i < x_values.size(); i++){
-	  //cout << x_values.at(i) << " - ";
-	  //cout << y_values.at(i) << endl;
-	  
-	  float R2=x_values.at(i)*x_values.at(i)+y_values.at(i)*y_values.at(i);
-	  float theta=acos(z_values.at(i)/sqrt(R2+z_values.at(i)*z_values.at(i)));
-	  int ith=(int) (theta/dtheta)+0.5f;
-	  
-	  float sec=atan2(y_values.at(i),x_values.at(i));
-	  if (sec<0.f)
-	  {
-	      sec=2*M_PI+sec;
-	  }
-	  int isec=int(sec/2/M_PI*Nsec);
-	  
-	  for(int iphi = 0; iphi < Nphi; iphi++){
-	      float phi=phimin+iphi*dphi;
-	      float rho=R2/2.f/(x_values.at(i)*cos(phi)+y_values.at(i)*sin(phi));
-	      int irho=(int)((rho-rhomin)/drho)+0.5f;
-	      if (rho<=rhomax && rho>rhomin)
-	      {
-		  acc_Mat[isec][ith][iphi][irho]++;
-	      }
-	  }
+		  //cout << x_values.at(i) << " - ";
+		  //cout << y_values.at(i) << endl;
+
+		  float R2=x_values.at(i)*x_values.at(i)+y_values.at(i)*y_values.at(i);
+		  float theta=acos(z_values.at(i)/sqrt(R2+z_values.at(i)*z_values.at(i)));
+		  int ith=(int) (theta/dtheta)+0.5f;
+
+		  float sec=atan2(y_values.at(i),x_values.at(i));
+		  if (sec<0.f)
+		  {
+			  sec=2*M_PI+sec;
+		  }
+		  int isec=int(sec/2/M_PI*Nsec);
+
+		  for(int iphi = 0; iphi < Nphi; iphi++){
+			  float phi=phimin+iphi*dphi;
+			  float rho=R2/2.f/(x_values.at(i)*cos(phi)+y_values.at(i)*sin(phi));
+			  int irho=(int)((rho-rhomin)/drho)+0.5f;
+			  if (rho<=rhomax && rho>rhomin)
+			  {
+			  acc_Mat[isec][ith][iphi][irho]++;
+			  }
+		  }
       }
       
 #ifdef VERBOSE_DUMP
@@ -434,10 +468,11 @@ int main(int argc, char* argv[]){
       checkCudaErrors(cudaFree(dev_y_values));
       checkCudaErrors(cudaFree(dev_z_values));
       
+#ifndef CUDA_MANAGED_TRANSFER
       free(x_values_temp);
       free(y_values_temp);
       free(z_values_temp);
-      
+#endif
       x_values.clear();
       y_values.clear();
       z_values.clear();
@@ -456,18 +491,18 @@ int main(int argc, char* argv[]){
       unsigned int *NMrel;
       
       start_time();   
-      checkCudaErrors(cudaMalloc((void **) &NMrel, (sizeof(unsigned int))));
-      checkCudaErrors(cudaMemset(NMrel, 0, sizeof(unsigned int)));
       
 #ifdef CUDA_MANAGED_TRANSFER
-      int cudaVer = 0;
-      cudaRuntimeGetVersion(&cudaVer);
+
       if(cudaVer >= 6000){
-	checkCudaErrors(cudaMallocManaged(&dev_indexOutput,(sizeof(struct track_param)* (Nsec * Ntheta * Nphi * Nrho)) ));
+    	  checkCudaErrors(cudaMallocManaged(&dev_indexOutput,(sizeof(struct track_param)* (Nsec * Ntheta * Nphi * Nrho)) ));
+    	  checkCudaErrors(cudaMallocManaged(&NMrel,sizeof(unsigned int) ));
+    	  *NMrel = 0;
       }else{
 #endif
-	
-      checkCudaErrors(cudaMalloc((void **) &dev_indexOutput, (sizeof(struct track_param)* (Nsec * Ntheta * Nphi * Nrho)) ));
+    	  checkCudaErrors(cudaMalloc((void **) &NMrel, (sizeof(unsigned int))));
+    	  checkCudaErrors(cudaMemset(NMrel, 0, sizeof(unsigned int)));
+    	  checkCudaErrors(cudaMalloc((void **) &dev_indexOutput, (sizeof(struct track_param)* (Nsec * Ntheta * Nphi * Nrho)) ));
       
 #ifdef CUDA_MANAGED_TRANSFER
       }
@@ -502,7 +537,17 @@ int main(int argc, char* argv[]){
 #endif
       
 #endif
-      checkCudaErrors(cudaMemcpy((void *) &host_NMrel, NMrel, (sizeof(int)), cudaMemcpyDeviceToHost));
+
+#ifdef CUDA_MANAGED_TRANSFER
+
+      if(cudaVer >= 6000){
+    	  host_NMrel = *NMrel;
+      }else{
+#endif
+    	  checkCudaErrors(cudaMemcpy((void *) &host_NMrel, NMrel, (sizeof(int)), cudaMemcpyDeviceToHost));
+#ifdef CUDA_MANAGED_TRANSFER
+      }
+#endif
       timing[4] = stop_time("Copy results DtoH");
 
 #ifdef VERBOSE_DUMP
@@ -666,8 +711,10 @@ int main(int argc, char* argv[]){
       
   }
   
+#ifndef CUDA_MANAGED_TRANSFER
 #ifdef CUDA_MALLOCHOST_OUTPUT      
   checkCudaErrors(cudaFreeHost(host_out_tracks));
+#endif
 #endif
     
     return 0;
@@ -718,4 +765,6 @@ void read_inputFile(string file_path, unsigned int num_hits)
     
     
 }
+
+
 
