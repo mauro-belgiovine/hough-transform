@@ -74,7 +74,7 @@ struct track_param{
 #define get4DIndex(x,y,z,r) ((x)*(Ntheta*Nphi*Nrho))+(((y)*Nphi*Nrho) +(((z)*Nrho)+(r)))
 #define get3DIndex(y,z,r) (((y)*Nphi*Nrho) +(((z)*Nrho)+(r)))
 
-__global__ void voteHoughSpace(float *dev_x_values, float *dev_y_values, float *dev_z_values, int *dev_accMat, float dtheta, float drho, float dphi){
+__global__ void voteHoughSpace(float *dev_x_values, float *dev_y_values, float *dev_z_values, int *dev_accMat, float dtheta, float dphi, float drho){
 
 	__shared__ float x_val;
 	__shared__ float y_val;
@@ -118,7 +118,6 @@ __global__ void voteHoughSpace(float *dev_x_values, float *dev_y_values, float *
 	float rho=R2/2.f/(x_val*cos(phi)+y_val*sin(phi));
 	int irho=(int)((rho-rhomin)/drho)+0.5f;
 
-	/*int accu_index = (isec*(Ntheta*Nphi*Nrho))+((ith*Nphi*Nrho) +((iphi*Nrho)+irho));*/
 	int accu_index = get3DIndex(ith, iphi, irho);
 
 	if (rho<=rhomax && rho>rhomin)
@@ -255,7 +254,7 @@ class ht_gpu_data{
 		void vote_HoughSpace(){
 			//first, set proper GPU device id
 			checkCudaErrors(cudaSetDevice(id));
-			voteHoughSpace <<<hit_n, Nphi, 0, stream>>> (x_values, y_values, z_values, accMat, dtheta, drho, dphi); 
+			voteHoughSpace <<<hit_n, Nphi, 0, stream>>> (x_values, y_values, z_values, accMat, dtheta, dphi, drho); 
 			//assumes that Nphi == Nrho
 		}
 
