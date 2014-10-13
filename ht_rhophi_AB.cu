@@ -8,10 +8,7 @@
 // compile:
 // nvcc -I/usr/local/cuda-5.5/samples/common/inc -I/usr/local/cuda-5.5/targets/x86_64-linux/include -gencode arch=compute_20,code=sm_21 -o ht_rhophi ht_rhophi.cu
 
-
-
-//NOTE: INVERTITE DIMENSIONI NRHO-NPHI PER ACCESSO MATRICE
-
+//NOTE: INVERTITE DIMENSIONI NA-NA PER ACCESSO MATRICE
 #include <cuda_runtime.h>
 // includes, project
 #include <helper_cuda.h>
@@ -33,13 +30,15 @@ using namespace std;
 #define NHMAX 300
 #define Nsec 4 // Numero settori in piano trasverso
 #define Ntheta 16 // Numero settori in piano longitudinale
-#define Nphi 1024 // Numero bin angolo polare
-#define Nrho 1024 // Numero bin distanza radiale
+#define NA 1024 // Numero bin angolo polare
+#define NB 1024 // Numero bin distanza radiale
 
-#define rhomin 500.f // mm
-#define rhomax 100000.f // mm
-#define phimin 0.f // rad
-#define phimax 2*M_PI // rad
+#define Amin -50000.f // mm
+#define Amax 50000.f // mm
+#define Bmin -50000.f // mm
+#define Bmax 50000.f // mm
+#define rhomin 2000.f // mm
+#define rhomax 2000.f // mm
 #define thetamin 0.f // rad
 #define thetamax M_PI // rad
 
@@ -53,19 +52,21 @@ using namespace std;
 
 #define max_tracks_out 100
 
-int acc_Mat [ Nsec ][ Ntheta ][ Nrho ] [Nphi ];
-//int Max_rel [ Nsec ][ Ntheta ][Nphi ] [Nrho ];
-int debug_accMat[ Nsec ][ Ntheta ][ Nrho ] [ Nphi ];
+int acc_Mat [ Nsec ][ Ntheta ] [NB ][NA ];
+//int Max_rel [ Nsec ][ Ntheta ] [NB ][NA ];
+int debug_accMat[ Nsec ][ Ntheta ] [ NB ][ NA ];
 
+float m_pt;
 float dtheta= M_PI/Ntheta;
-float drho= (rhomax-rhomin)/Nrho;
-float dphi= (phimax-phimin)/Nphi;
+float dA=(Amax-Amin)/NA;
+float dB=(Bmax-Bmin)/NB;
+
+#define OUT_VIEW_FRAME 3;
 
 vector<float> x_values;
 vector<float> y_values;
 vector<float> z_values;
-
-#define OUT_VIEW_FRAME 3;
+vector<float> pt_values;
 
 #ifndef PARALLEL_REDUX_MAX
 
@@ -73,12 +74,12 @@ struct track_param{
       int acc;
       /*unsigned int isec;
       unsigned int ith;
-      unsigned int iphi;
-      unsigned int irho;*/
+      unsigned int iA;
+      unsigned int iB;*/
     };
     
 #ifndef CUDA_MALLOCHOST_OUTPUT
-struct track_param host_out_tracks[ Nsec * Ntheta * Nrho * Nphi ];
+struct track_param host_out_tracks[ Nsec * Ntheta  * NB * NA];
 #endif
 
 #endif
@@ -134,10 +135,11 @@ inline float stop_time(const char *msg) {
 }
 
 //#define floatToInt(x) (((x) >= 0) ? (int)((x) + 0.5) : (int)((x) - 0.5))
-#define get4DIndex(s,t,r,p) ((s)*(Ntheta*Nrho*Nphi))+(((t)*Nrho*Nphi) +(((r)*Nphi)+(p)))
-#define get2DIndex(r,p) (((r)*Nphi)+(p))
 
-__global__ void voteHoughSpace(float *dev_x_values, float *dev_y_values, float *dev_z_values, int *dev_accMat, float dtheta, float drho, float dphi){
+#define get4DIndex(s,t,b,a) ((s)*(Ntheta*NB*NA))+(((t)*NB*NA) +(((b)*NA)+(a)))
+#define get2DIndex(r,p) (((r)*NA)+(p))
+
+__global__ void voteHoughSpace(float *dev_x_values, float *dev_y_values, float *dev_z_values, int *dev_accMat, float dtheta, float dB, float dA){
   
   __shared__ float x_val;
   __shared__ float y_val;
@@ -150,7 +152,7 @@ __global__ void voteHoughSpace(float *dev_x_values, float *dev_y_values, float *
   }
 
   __syncthreads();
-  
+
   float R2 = x_val*x_val + y_val*y_val;
   float theta=acos(z_val/sqrt(R2+z_val*z_val));
   
@@ -165,15 +167,18 @@ __global__ void voteHoughSpace(float *dev_x_values, float *dev_y_values, float *
   //int isec=int(sec/2/M_PI*Nsec);
   int isec = floor((sec/2/M_PI*Nsec));
   
-  int iphi = threadIdx.x;
-  float phi=phimin+iphi*dphi;
-  float rho=R2/2.f/(x_val*cos(phi)+y_val*sin(phi));
-  //int irho=(int)((rho-rhomin)/drho)+0.5f;
-  int irho = floor(((rho-rhomin)/drho));
+  int iA = threadIdx.x;
+  float A=Amin+iA*dA;
+  float B=(R2-(2*A*x_val))/(2*y_val);
+
+  //float rho=sqrt(A*A+B*B);
+
+  //int iB=(int)((B-Bmin)/dB)+0.5f;
+  int iB = floor(((B-Bmin)/dB));
   
-  int accu_index = get4DIndex(isec, ith, irho, iphi);//(isec*(Ntheta*Nphi*Nrho))+((ith*Nphi*Nrho) +((iphi*Nrho)+irho));
+  int accu_index = get4DIndex(isec, ith, iB, iA);//(isec*(Ntheta*NA*NB))+((ith*NA*NB) +((iA*NB)+iB));
   
-  if (rho<=rhomax && rho>rhomin)
+  if ((iB > 0) && (iB < NB) )
   {
     atomicAdd(&(dev_accMat[accu_index]),1);
   }
@@ -181,13 +186,13 @@ __global__ void voteHoughSpace(float *dev_x_values, float *dev_y_values, float *
 
 #ifndef PARALLEL_REDUX_MAX
 
-__global__ void findRelativeMax_withShared(int *dev_accMat, struct track_param *dev_output, unsigned int *NMrel){
+__global__ void findRelativeMax(int *dev_accMat, struct track_param *dev_output, unsigned int *NMrel){
   
   
-	unsigned int isec = blockIdx.x;
-	unsigned int ith = blockIdx.y;
-	unsigned int iphi = threadIdx.x;
-	unsigned int irho = blockIdx.z;
+  unsigned int isec = blockIdx.x;
+  unsigned int ith = blockIdx.y;
+  unsigned int iA = threadIdx.x;
+  unsigned int iB = blockIdx.z;
   
   unsigned int globalIndex = getGlobalIdx_2D_2D();
   //unsigned int tid = threadIdx.y * blockDim.x + threadIdx.x;
@@ -197,65 +202,58 @@ __global__ void findRelativeMax_withShared(int *dev_accMat, struct track_param *
   if(threadIdx.x == 0) local_NMrel = 0;
   __syncthreads();*/
   
-  extern __shared__ int SH_local_accMat[];
-
   //check if it is a local maxima by verifying that it is greater then (>=) its neighboors
   
-  /*unsigned int index_Y0 = get2DIndex(0,iphi);
-  unsigned int index_Y1 = get2DIndex(1,iphi);
-  unsigned int index_Y2 = get2DIndex(2,iphi);*/
-  unsigned int index_Y1 = iphi;
+  //we must check from isec >= 0, ith >= 1, iA >= 1, iB >= 1
+  if(((iA > 0) && (iB > 0)) && ((iA < NA-1) && (iB < NB-1))){
+    
+    //each thread is assigned to one point of the accum. matrix:
+    int acc= dev_accMat[get4DIndex(isec, ith, iB, iA)];
+    
+    if (acc >= ac_soglia){
+    
+      if (acc > dev_accMat[get4DIndex(isec,ith,iB-1,iA-1)] && acc > dev_accMat[get4DIndex(isec,ith,iB+1,iA-1)]){
+      
+	      if(acc > dev_accMat[get4DIndex(isec, ith, iB-1,iA)] && acc > dev_accMat[get4DIndex(isec, ith, iB+1, iA)]){
+	      	
+	          if (acc > dev_accMat[get4DIndex(isec,ith,iB-1,iA+1)] && acc > dev_accMat[get4DIndex(isec,ith,iB+1,iA+1)]){
+	
+			if(acc >= dev_accMat[get4DIndex(isec, ith, iB, iA-1)] && acc > dev_accMat[get4DIndex(isec, ith, iB, iA+1)]){
+		      
+				/*atomicAdd(&local_NMrel, 1);
+		
+				if(threadIdx.x == 0){
+				  mutex.lock();
+				  *NMrel += local_NMrel;
+				  mutex.unlock();
+				}*/
+				atomicAdd(NMrel, 1);
+		
+				//mutex.lock();
+				dev_output[globalIndex].acc = acc;
+				/*dev_output[globalIndex].isec = isec;
+				dev_output[globalIndex].ith = ith;
+				dev_output[globalIndex].iA = iA;
+				dev_output[globalIndex].iB = iB;*/
+				//mutex.unlock();
+			}
+		  }
 
-  SH_local_accMat[index_Y1] = dev_accMat[get4DIndex(isec, ith, irho, iphi)]; //save into shared memory this thread accumulator
-  //In order to avoid oppressing global memory access, we delegate upper and lower rows, irho+1 and irho-1, loading into shared memory
-  //only to those threads which passes the first "cut" on threshold
-  //__syncthreads();
-
-  //we must check from isec >= 0, ith >= 0, iphi >= 1, irho >= 1
-  if(((iphi > 0) && (irho > 0)) && ((iphi < Nphi-1) && (irho < Nrho-1))){
-
-    if (SH_local_accMat[index_Y1] >= ac_soglia){ //we're sure that each thread has its own acc saved in shared memory
-
-    	/*SH_local_accMat[index_Y0] = dev_accMat[get4DIndex(isec, ith, irho-1, iphi)];
-    	SH_local_accMat[index_Y2] = dev_accMat[get4DIndex(isec, ith, irho+1, iphi)];
-    	__syncthreads();*/
-
-    	//NOTE: since we only access once (irho-1,iphi) and (irho+1,iphi) for this computation, and there isn't any reuse for other
-    	//threads of these informations, we don't need to put the other two rows in shared memory
-
-    	//(x,y) > (x,y-1) && (x,y) >= (x,y+1)
-        /*if(SH_local_accMat[index_Y1] > SH_local_accMat[index_Y0] && SH_local_accMat[index_Y1] >= SH_local_accMat[index_Y2]){*/
-    	if(SH_local_accMat[index_Y1] > dev_accMat[get4DIndex(isec, ith, irho-1, iphi)] && SH_local_accMat[index_Y1] >= dev_accMat[get4DIndex(isec, ith, irho+1, iphi)]){
-    		//__syncthreads(); //this is just to make sure that all threads had written in the shared memory, before reading each other values
-    		//(x,y) > (x-1, y) && (x,y) >= (x+1, y)
-    		if(SH_local_accMat[index_Y1] > SH_local_accMat[index_Y1-1] && SH_local_accMat[index_Y1] >= SH_local_accMat[index_Y1+1]){
-
-			/*atomicAdd(&local_NMrel, 1);*/
-        	//NOTE atomic op on shared memory are SLOWER than global memory, because they're implemented in software
-			atomicAdd(NMrel, 1);
-
-			dev_output[globalIndex].acc = SH_local_accMat[index_Y1];
-			//dev_output[globalIndex].acc = acc;
-
-			/*dev_output[globalIndex].isec = isec;
-			dev_output[globalIndex].ith = ith;
-			dev_output[globalIndex].iphi = iphi;
-			dev_output[globalIndex].irho = irho;*/
-    	  }
-      }
+	      }
+	}
     }
     
     
   }               
 }
 
-__global__ void findRelativeMax(int *dev_accMat, struct track_param *dev_output, unsigned int *NMrel){
+__global__ void findRelativeMax_withShared(int *dev_accMat, struct track_param *dev_output, unsigned int *NMrel){
 
 
   unsigned int isec = blockIdx.x;
   unsigned int ith = blockIdx.y;
-  unsigned int iphi = threadIdx.x;
-  unsigned int irho = blockIdx.z;
+  unsigned int iA = threadIdx.x;
+  unsigned int iB = blockIdx.z;
 
   unsigned int globalIndex = getGlobalIdx_2D_2D();
   //unsigned int tid = threadIdx.y * blockDim.x + threadIdx.x;
@@ -265,45 +263,62 @@ __global__ void findRelativeMax(int *dev_accMat, struct track_param *dev_output,
   if(threadIdx.x == 0) local_NMrel = 0;
   __syncthreads();*/
 
+  extern __shared__ int SH_local_accMat[];
+
+  unsigned int index_Y0 = get2DIndex(0,iA); //upper row index
+  unsigned int index_Y1 = get2DIndex(1,iA); //row index
+  unsigned int index_Y2 = get2DIndex(2,iA); //lower row index
+
+  //each thread is assigned to one point of the accum. matrix:
+  SH_local_accMat[index_Y1] = dev_accMat[get4DIndex(isec, ith, iB, iA)];
+  //if(iB < NB-1) SH_local_accMat[index_Y2] = dev_accMat[get4DIndex(isec, ith, iB+1, iA)];
+  //if(iB > 0) SH_local_accMat[index_Y0] = dev_accMat[get4DIndex(isec, ith, iB-1, iA)];
+
   //check if it is a local maxima by verifying that it is greater then (>=) its neighboors
 
-  //we must check from isec >= 0, ith >= 0, iphi >= 1, irho >= 1
-  if(((iphi > 0) && (irho > 0)) && ((iphi < Nphi-1) && (irho < Nrho-1))){
+  //we must check from isec >= 0, ith >= 1, iA >= 1, iB >= 1
+  if(((iA > 0) && (iB > 0)) && ((iA < NA-1) && (iB < NB-1))){
 
-    //each thread is assigned to one point of the accum. matrix:
-    int acc= dev_accMat[get4DIndex(isec, ith, irho, iphi)];
+	  //
+	  //
+	  //__syncthreads();
 
-    if (acc >= ac_soglia){
+    if (SH_local_accMat[index_Y1] >= ac_soglia){
 
-      if(acc > dev_accMat[get4DIndex(isec, ith, irho-1, iphi)] && acc >= dev_accMat[get4DIndex(isec, ith, irho+1, iphi)]){
+    	if(SH_local_accMat[index_Y1] > dev_accMat[get4DIndex(isec, ith, iB-1, iA)] && SH_local_accMat[index_Y1] > dev_accMat[get4DIndex(isec, ith, iB+1, iA)]){
+    		//if(SH_local_accMat[index_Y1] > SH_local_accMat[index_Y0] && SH_local_accMat[index_Y1] > SH_local_accMat[index_Y2]){
+    		if (SH_local_accMat[index_Y1] > dev_accMat[get4DIndex(isec, ith, iB-1, iA-1)] && SH_local_accMat[index_Y1] > dev_accMat[get4DIndex(isec, ith, iB+1, iA-1)]){
+    		//if (SH_local_accMat[index_Y1] > SH_local_accMat[index_Y0-1] && SH_local_accMat[index_Y1] > SH_local_accMat[index_Y2-1]){
+	          if (SH_local_accMat[index_Y1] > dev_accMat[get4DIndex(isec, ith, iB-1, iA+1)] && SH_local_accMat[index_Y1] > dev_accMat[get4DIndex(isec, ith, iB+1, iA+1)]){
+    		  //if (SH_local_accMat[index_Y1] > SH_local_accMat[index_Y0+1] && SH_local_accMat[index_Y1] > SH_local_accMat[index_Y2+1]){
+				if(SH_local_accMat[index_Y1] >= SH_local_accMat[index_Y1-1] && SH_local_accMat[index_Y1] > SH_local_accMat[index_Y1+1]){
 
-        if(acc > dev_accMat[get4DIndex(isec, ith, irho, iphi-1)] && acc >= dev_accMat[get4DIndex(isec, ith, irho, iphi+1)]){
+					/*atomicAdd(&local_NMrel, 1);
 
-                /*atomicAdd(&local_NMrel, 1);
+					if(threadIdx.x == 0){
+					  mutex.lock();
+					  *NMrel += local_NMrel;
+					  mutex.unlock();
+					}*/
+					atomicAdd(NMrel, 1);
 
-                if(threadIdx.x == 0){
-                  mutex.lock();
-                  *NMrel += local_NMrel;
-                  mutex.unlock();
-                }*/
-                atomicAdd(NMrel, 1);
+					//mutex.lock();
+					dev_output[globalIndex].acc = SH_local_accMat[index_Y1];
+					/*dev_output[globalIndex].isec = isec;
+					dev_output[globalIndex].ith = ith;
+					dev_output[globalIndex].iA = iA;
+					dev_output[globalIndex].iB = iB;*/
+					//mutex.unlock();
+				}
+			  }
 
-                //mutex.lock();
-                dev_output[globalIndex].acc = acc;
-                /*dev_output[globalIndex].isec = isec;
-                dev_output[globalIndex].ith = ith;
-                dev_output[globalIndex].iphi = iphi;
-                dev_output[globalIndex].irho = irho;*/
-                //mutex.unlock();
-        }
-
+	      }
       }
     }
 
 
   }
 }
-
 
 #else
 
@@ -408,9 +423,9 @@ int main(int argc, char* argv[]){
     start_time();
 
 #ifdef CUDA_MALLOCHOST_OUTPUT
-      checkCudaErrors(cudaMallocHost((void **) &host_out_tracks, (sizeof(struct track_param)*(Nsec * Ntheta *  Nrho * Nphi))));
+      checkCudaErrors(cudaMallocHost((void **) &host_out_tracks, (sizeof(struct track_param)*(Nsec * Ntheta  * NB* NA))));
 #else
-      host_out_tracks = malloc(sizeof(struct track_param)*(Nsec * Ntheta * Nrho * Nphi));
+      host_out_tracks = malloc(sizeof(struct track_param)*(Nsec * Ntheta  * NB * NA));
 #endif
       float init_outputMatrix = stop_time("init output matrix with cudaMallocHost");
       cout << "time to init output matrix (once): " << init_outputMatrix << endl;
@@ -434,14 +449,14 @@ int main(int argc, char* argv[]){
       //float R = 0.f;
             
       // Inizializzo a zero le matrici
-      memset(&acc_Mat, 0, (sizeof(int)*(Nsec*Ntheta*Nrho*Nphi)) );
-      memset(&debug_accMat, 0, (sizeof(int)*(Nsec*Ntheta*Nrho*Nphi)) );
-      //memset(&Max_rel, 0, (sizeof(int)*(Nsec*Ntheta*Nphi*Nrho)) );
+      memset(&acc_Mat, 0, (sizeof(int)*(Nsec*Ntheta*NB*NA)) );
+      memset(&debug_accMat, 0, (sizeof(int)*(Nsec*Ntheta*NB*NA)) );
+      //memset(&Max_rel, 0, (sizeof(int)*(Nsec*Ntheta*NA*NB)) );
       
       //alloc accumulator matrix on GPU
       start_time();
-      checkCudaErrors(cudaMalloc((void **) &dev_accMat, (sizeof(int)* (Nsec * Ntheta * Nrho*Nphi)) ));
-      checkCudaErrors(cudaMemset(dev_accMat, 0, (sizeof(int)*(Nsec*Ntheta*Nrho*Nphi))));
+      checkCudaErrors(cudaMalloc((void **) &dev_accMat, (sizeof(int)* (Nsec * Ntheta * NB  * NA)) ));
+      checkCudaErrors(cudaMemset(dev_accMat, 0, (sizeof(int)*(Nsec*Ntheta*NB*NA))));
       timing[1] = stop_time("malloc dev_accMat and memset(0)");
       
       //riempi i valori dentro x_values , y_values , z_values
@@ -479,10 +494,11 @@ int main(int argc, char* argv[]){
 		  			y_values_temp[i] = y_values.at(i);
 		  			z_values_temp[i] = z_values.at(i);
 		  }
-		  start_time();
+		  
 		  checkCudaErrors(cudaMalloc((void **) &dev_x_values, sizeof(float)*x_values.size()));
 		  checkCudaErrors(cudaMalloc((void **) &dev_y_values, sizeof(float)*y_values.size()));
 		  checkCudaErrors(cudaMalloc((void **) &dev_z_values, sizeof(float)*z_values.size()));
+		  start_time();
 		  checkCudaErrors(cudaMemcpy(dev_x_values, x_values_temp, sizeof(float)*x_values.size(), cudaMemcpyHostToDevice));
 		  checkCudaErrors(cudaMemcpy(dev_y_values, y_values_temp, sizeof(float)*y_values.size(), cudaMemcpyHostToDevice));
 		  checkCudaErrors(cudaMemcpy(dev_z_values, z_values_temp, sizeof(float)*z_values.size(), cudaMemcpyHostToDevice));
@@ -493,16 +509,16 @@ int main(int argc, char* argv[]){
 #endif
 
       start_time();
-      voteHoughSpace <<<x_values.size(), Nphi>>> (dev_x_values, dev_y_values, dev_z_values, dev_accMat, dtheta, drho, dphi); //assumes that Nphi == Nrho
+      voteHoughSpace <<<x_values.size(), NA>>> (dev_x_values, dev_y_values, dev_z_values, dev_accMat, dtheta, dB, dA); 
       timing[2] = stop_time("Vote");
 #ifdef VERBOSE_DUMP     
-      checkCudaErrors(cudaMemcpy((void *) &debug_accMat, dev_accMat, (sizeof(int)*(Nsec*Ntheta*Nrho*Nphi)), cudaMemcpyDeviceToHost));
+      checkCudaErrors(cudaMemcpy((void *) &debug_accMat, dev_accMat, (sizeof(int)*(Nsec*Ntheta*NB*NA)), cudaMemcpyDeviceToHost));
 #endif
 
       //CPU execution
       for(unsigned int i = 0; i < x_values.size(); i++){
-		  //cout << x_values.at(i) << " - ";
-		  //cout << y_values.at(i) << endl;
+		  
+		  m_pt=pt_values.at(i)*1000.0;
 
 		  float R2=x_values.at(i)*x_values.at(i)+y_values.at(i)*y_values.at(i);
 		  float theta=acos(z_values.at(i)/sqrt(R2+z_values.at(i)*z_values.at(i)));
@@ -517,14 +533,15 @@ int main(int argc, char* argv[]){
 		  //int isec=int(sec/2/M_PI*Nsec);
 		  int isec = floor(sec/2/M_PI*Nsec);
 
-		  for(int iphi = 0; iphi < Nphi; iphi++){
-			  float phi=phimin+iphi*dphi;
-			  float rho=R2/2.f/(x_values.at(i)*cos(phi)+y_values.at(i)*sin(phi));
-			  //int irho=(int)((rho-rhomin)/drho)+0.5f;
-			  int irho = floor(((rho-rhomin)/drho));
-			  if (rho<=rhomax && rho>rhomin)
+		  for(int iA = 0; iA < NA; iA++){
+			  float A=Amin+iA*dA;
+			  float B=(R2-2*A*x_values.at(i))/(2*y_values.at(i));
+			  float rho=sqrt(A*A+B*B);
+			  //int iB=(int)((B-Bmin)/dB)+0.5f;
+			  int iB = floor(((B-Bmin)/dB));
+			  if (iB > 0 && iB < NB )
 			  {
-			  acc_Mat[isec][ith][irho][iphi]++;
+			  	acc_Mat[isec][ith][iB][iA]++;
 			  }
 		  }
       }
@@ -538,13 +555,13 @@ int main(int argc, char* argv[]){
 	  
 	  for(unsigned int ith = 0; ith < Ntheta; ith++){
 	      
-	      for(unsigned int iphi = 0; iphi < Nphi; iphi++){
+	      for(unsigned int iA = 0; iA < NA; iA++){
 		  
-		  for(unsigned int irho = 0; irho < Nrho; irho++){
+		  for(unsigned int iB = 0; iB < NB; iB++){
 		    
-		    if(acc_Mat[isec][ith][irho][iphi] != debug_accMat[isec][ith][irho][iphi]){
-		    printf("diverso acc_Mat[%d][%d][%d][%d] %d - debug_accMat[%d][%d][%d][%d] %d \n", isec, ith, irho, iphi, acc_Mat[isec][ith][irho][iphi],
-		      isec, ith, irho, iphi, debug_accMat[isec][ith][irho][iphi]);
+		    if(acc_Mat[isec][ith][iB][iA] != debug_accMat[isec][ith][iB][iA]){
+		    printf("diverso acc_Mat[%d][%d][%d][%d] %d - debug_accMat[%d][%d][%d][%d] %d \n", isec, ith,  iB,iA, acc_Mat[isec][ith][iB][iA],
+		      isec, ith, iB,iA, debug_accMat[isec][ith][iB][iA]);
 		      errore++;
 		    }else corretto++;
 		    letto++;
@@ -557,12 +574,12 @@ int main(int argc, char* argv[]){
             cout << "sec " << i << ":" << endl;
         for(unsigned int ith = 0; ith < Ntheta; ith++){
           
-            for(unsigned int iphi = 0; iphi < Nphi; iphi++){
+            for(unsigned int iA = 0; iA < NA; iA++){
         
-            for(unsigned int irho = 0; irho < Nrho; irho++){
+            for(unsigned int iB = 0; iB < NB; iB++){
 
-              if(acc_Mat[i][ith][iphi][irho] != 0) 
-                cout << "accMat[get3DIndex(" << ith << ", " << iphi << ", " << irho << ") = " << acc_Mat[i][ith][iphi][irho] << endl;
+              if(acc_Mat[i][ith][iB][iA] != 0)
+                cout << "accMat[get3DIndex(" << ith << ", " << iA << ", " << iB << ") = " << acc_Mat[i][ith][iB][iA] << endl;
 
             }
           }
@@ -601,55 +618,55 @@ int main(int argc, char* argv[]){
 #ifdef CUDA_MANAGED_TRANSFER
 
       if(cudaVer >= 6000){
-    	  checkCudaErrors(cudaMallocManaged(&dev_indexOutput,(sizeof(struct track_param)* (Nsec * Ntheta * Nrho * Nphi)) ));
+    	  checkCudaErrors(cudaMallocManaged(&dev_indexOutput,(sizeof(struct track_param)* (Nsec * Ntheta  * NB* NA)) ));
     	  checkCudaErrors(cudaMallocManaged(&NMrel,sizeof(unsigned int) ));
     	  *NMrel = 0;
       }else{
 #endif
     	  checkCudaErrors(cudaMalloc((void **) &NMrel, (sizeof(unsigned int))));
     	  checkCudaErrors(cudaMemset(NMrel, 0, sizeof(unsigned int)));
-    	  checkCudaErrors(cudaMalloc((void **) &dev_indexOutput, (sizeof(struct track_param)* (Nsec * Ntheta * Nrho * Nphi )) ));
+    	  checkCudaErrors(cudaMalloc((void **) &dev_indexOutput, (sizeof(struct track_param)* (Nsec * Ntheta  * NB* NA)) ));
       
 #ifdef CUDA_MANAGED_TRANSFER
       }
 #endif
       
-      checkCudaErrors(cudaMemset(dev_indexOutput, -1, (sizeof(struct track_param)* (Nsec * Ntheta * Nrho * Nphi ))));
+      checkCudaErrors(cudaMemset(dev_indexOutput, -1, (sizeof(struct track_param)* (Nsec * Ntheta  * NB* NA))));
       
       timing[1] += stop_time("malloc dev_indexOutput+NMrel and memset");
       
       // dividiamo adeguatamente il lavoro
       // in base al numero massimo di thread disponibili in un singolo thread-block
-      unsigned int dim_x_block = Nphi;
+      unsigned int dim_x_block = NA;
       unsigned int dim_y_block = maxThreadsPerBlock/dim_x_block;
       unsigned int dim_x_grid = Nsec;
       unsigned int dim_y_grid = Ntheta;
-      unsigned int dim_z_grid = (Nrho/dim_y_block);
+      unsigned int dim_z_grid = (NB/dim_y_block);
       
       dim3 grid(dim_x_grid, dim_y_grid, dim_z_grid);
       dim3 block(dim_x_block, dim_y_block);
+      
+
 
       start_time();
-      findRelativeMax<<<grid, block>>>(dev_accMat, dev_indexOutput, NMrel);
+      findRelativeMax <<<grid, block>>> (dev_accMat, dev_indexOutput, NMrel);
       timing[3] = stop_time("Max. Relative");
+      
+      checkCudaErrors(cudaMemset(NMrel, 0, sizeof(unsigned int)));
+      checkCudaErrors(cudaMemset(dev_indexOutput, -1, (sizeof(struct track_param)* (Nsec * Ntheta * NB* NA ))));
 
       size_t block_shMemsize = dim_x_block * dim_y_block * sizeof(int);
-      //block_shMemsize *= OUT_VIEW_FRAME; //add more cells to each block shared-memory bank
-      cout << "sh memsize " << block_shMemsize << endl;
-      checkCudaErrors(cudaMemset(NMrel, 0, sizeof(unsigned int)));
-      checkCudaErrors(cudaMemset(dev_indexOutput, -1, (sizeof(struct track_param)* (Nsec * Ntheta * Nrho * Nphi ))));
+      block_shMemsize *= OUT_VIEW_FRAME; //add more cells to each block shared-memory bank
       findRelativeMax_withShared <<<grid, block, block_shMemsize>>> (dev_accMat, dev_indexOutput, NMrel);
-
-
 
       start_time();
       
 #ifndef CUDA_MANAGED_TRANSFER
       
 #ifdef CUDA_MALLOCHOST_OUTPUT
-      checkCudaErrors(cudaMemcpy((void *) host_out_tracks, dev_indexOutput, (sizeof(int)* (Nsec * Ntheta * Nrho* Nphi)), cudaMemcpyDeviceToHost));
+      checkCudaErrors(cudaMemcpy((void *) host_out_tracks, dev_indexOutput, (sizeof(int)* (Nsec * Ntheta  * NB* NA)), cudaMemcpyDeviceToHost));
 #else
-      checkCudaErrors(cudaMemcpy((void *) &host_out_tracks, dev_indexOutput, (sizeof(int)* (Nsec * Ntheta * Nrho* Nphi)), cudaMemcpyDeviceToHost));
+      checkCudaErrors(cudaMemcpy((void *) &host_out_tracks, dev_indexOutput, (sizeof(int)* (Nsec * Ntheta * NB * NA )), cudaMemcpyDeviceToHost));
 #endif
       
 #endif
@@ -671,7 +688,7 @@ int main(int argc, char* argv[]){
 
       unsigned int ntracks = 0;
       
-      /*for(unsigned int i = 0; ((i < (Nsec * Ntheta * Nphi * Nrho)) && (ntracks < host_NMrel)); i++){
+      /*for(unsigned int i = 0; ((i < (Nsec * Ntheta * NA * NB)) && (ntracks < host_NMrel)); i++){
 #ifndef CUDA_MANAGED_TRANSFER	
 	if(host_out_tracks[i].acc > -1){
 	  cout << "track " << ntracks << " host_out_tracks value = " << host_out_tracks[i].acc << " [" << i << "]" << endl;
@@ -701,7 +718,7 @@ int main(int argc, char* argv[]){
       
 #define SET_GRID_DIM(npoints, threadsPerBlock) ceil((npoints+((threadsPerBlock)-1))/(threadsPerBlock))
       
-      unsigned int half_grid = SET_GRID_DIM((Nsec*Ntheta*Nphi*Nrho), maxThreadsPerBlock)/2;
+      unsigned int half_grid = SET_GRID_DIM((Nsec*Ntheta*NA*NB), maxThreadsPerBlock)/2;
       
       dim3 grid(half_grid, 2);
       
@@ -710,15 +727,15 @@ int main(int argc, char* argv[]){
       int * dev_maxBlockOutput;
       checkCudaErrors(cudaMalloc((void **) &dev_maxBlockOutput, (sizeof(int) * n_blocks)));
       int * dev_maxRelOutput;
-      checkCudaErrors(cudaMalloc((void **) &dev_maxRelOutput, (sizeof(int) * (Nsec*Ntheta*Nphi*Nrho))));
+      checkCudaErrors(cudaMalloc((void **) &dev_maxRelOutput, (sizeof(int) * (Nsec*Ntheta*NA*NB))));
       
-      reduceParallelMax<<<grid, maxThreadsPerBlock, 2*(maxThreadsPerBlock*sizeof(int))>>>(dev_accMat, dev_maxBlockOutput, dev_maxRelOutput, (Nsec*Ntheta*Nphi*Nrho));
+      reduceParallelMax<<<grid, maxThreadsPerBlock, 2*(maxThreadsPerBlock*sizeof(int))>>>(dev_accMat, dev_maxBlockOutput, dev_maxRelOutput, (Nsec*Ntheta*NA*NB));
       
       int *host_maxBlockOutput = (int *) malloc((sizeof(int)* n_blocks));
       checkCudaErrors(cudaMemcpy(host_maxBlockOutput, dev_maxBlockOutput, (sizeof(int) * n_blocks), cudaMemcpyDeviceToHost));
       
-      int *host_maxRelOutput = (int *) malloc((sizeof(int)* (Nsec*Ntheta*Nphi*Nrho)));
-      checkCudaErrors(cudaMemcpy(host_maxRelOutput, dev_maxRelOutput, (sizeof(int) * (Nsec*Ntheta*Nphi*Nrho)), cudaMemcpyDeviceToHost));
+      int *host_maxRelOutput = (int *) malloc((sizeof(int)* (Nsec*Ntheta*NA*NB)));
+      checkCudaErrors(cudaMemcpy(host_maxRelOutput, dev_maxRelOutput, (sizeof(int) * (Nsec*Ntheta*NA*NB)), cudaMemcpyDeviceToHost));
       
       unsigned int debug = 0;
       
@@ -743,7 +760,7 @@ int main(int argc, char* argv[]){
       }
       
       
-      /*for(unsigned int i = 0; i < (Nsec*Ntheta*Nphi*Nrho); i += maxThreadsPerBlock){
+      /*for(unsigned int i = 0; i < (Nsec*Ntheta*NA*NB); i += maxThreadsPerBlock){
 	
 	if(host_maxBlockOutput[i] != 0) cout << "block" << i/maxThreadsPerBlock << " max: " << host_maxBlockOutput[i] << " [" << i << "]" << endl;
 	
@@ -768,52 +785,71 @@ int main(int argc, char* argv[]){
       host_NMrel = 0;
       
       int accumax = -1;
-      int iphiMax = 0;
-      int irhoMax = 0;
+      int iAMax = 0;
+      int iBMax = 0;
       int ithMax = 0;
       int isecMax = 0;
-      
+      float m_A,m_B;
+      int m_sec, m_th;
       
       for(unsigned int isec = 0; isec < Nsec; isec++){
 	  
 	  for(unsigned int ith = 0; ith < Ntheta; ith++){
 	      
-	      for(unsigned int iphi = 1; iphi < Nphi-1; iphi++){
+	      for(unsigned int iA = 1; iA < NA-1; iA++){
 		  
-		  for(unsigned int irho = 1; irho < Nrho-1; irho++){
+		  for(unsigned int iB = 1; iB < NB-1; iB++){
 		      
-		      float acc=acc_Mat[isec][ith][irho][iphi];
+		      float acc=acc_Mat[isec][ith][iB][iA];
 		      if (acc >= ac_soglia){
 			  if (acc > accumax){
-			      accumax=acc;
+			      ithMax=ith;
+                              iAMax=iA;
+                              iBMax=iB;
+                              isecMax=isec+1;
+                              accumax=acc;
+                              m_th=(thetamin+ithMax*dtheta)*360.f/M_PI;
+                              m_A=Amin+iAMax*dA;
+                              m_B=Bmin+iBMax*dB;
+                              m_sec=isecMax;
 			  }
-			  /*if (acc>acc_Mat[isec][ith-1][iphi][irho] && acc >= acc_Mat[isec][ith+1][iphi][irho]){
-			      if (acc>acc_Mat[isec][ith][iphi-1][irho-1] && acc >= acc_Mat[isec][ith][iphi-1][irho+1]){ //TODO: chiedi a Lorenzo perché [iphi+1][irho+1] invece di [iphi-1][irho+1]
-				  if (acc>acc_Mat[isec][ith][iphi][irho-1] && acc >= acc_Mat[isec][ith][iphi][irho+1]){
-				      if (acc>acc_Mat[isec][ith][iphi+1][irho-1] && acc >= acc_Mat[isec][ith][iphi+1][irho+1]){*/
 			  
-			  if(acc > acc_Mat[isec][ith][irho-1][iphi] && acc >= acc_Mat[isec][ith][irho+1][iphi]){
-			    if(acc > acc_Mat[isec][ith][irho][iphi-1] && acc >= acc_Mat[isec][ith][irho][iphi+1]){
-					  //if (acc>=acc_Mat[isec][ith][irho][iphi+1] ){
-					      accumax = acc_Mat[isec][ith][irho][iphi+1];
-					      //Max_rel[isec][ith][irho][iphi+1]=1;
-					      host_NMrel++;
-					      ithMax=ith;
-					      irhoMax=irho;
-					      iphiMax=iphi;
-					      isecMax=isec+1;
-					      float t_th=(thetamin+ithMax*dtheta)*360.f/M_PI;
-					      float t_rho=rhomin+irhoMax*drho;
-					      float t_phi=phimin+iphiMax*dphi;
-					      //float q=t_rho/sin(t_phi);
-					      //float xm=-1/tan(t_phi);
-					      //cout << acc <<" "<< t_rho <<" "<< t_phi << " " << isecMax << endl;
-					      
-					  //}
-				      //}
-				  //}
-			      }
-			  }
+			  float t_rhomax=-1.;
+//                        if (acc>acc_Mat[isec][ith-1][iB][iA] && acc >= acc_Mat[isec][ith+1][iB][iA]){
+                            if (acc>acc_Mat[isec][ith][iB-1][iA-1] && acc > acc_Mat[isec][ith][iB+1][iA-1]){
+                                if (acc>acc_Mat[isec][ith][iB-1][iA] && acc > acc_Mat[isec][ith][iB+1][iA]){
+                                    if (acc>acc_Mat[isec][ith][iB-1][iA+1] && acc > acc_Mat[isec][ith][iB+1][iA+1]){
+                                        if (acc>=acc_Mat[isec][ith][iB][iA-1] && acc>acc_Mat[isec][ith][iB][iA+1]){
+                                            
+                                            
+                                            host_NMrel++;
+                                            float t_th=(thetamin+ithMax*dtheta)*360.f/M_PI;
+                                            float t_A=Amin+iA*dA;
+                                            float t_B=Bmin+iB*dB;
+                                            int t_sec=isec+1;
+                                            float t_rho=sqrt(t_A*t_A+t_B*t_B);
+                                            float t_phi=atan2(t_B,t_A);
+                                            if (t_phi<0.f)
+                                            {
+                                                t_phi+=2*M_PI;
+                                            }
+                                            
+                                            
+                                            
+                                            if (t_rho>rhomin) {
+                                            
+//                                                printf("%f %f %f %d %f %f %f %d %d \n",acc, t_rho,t_phi,t_sec,t_th,t_A,t_B,iA,iB);
+//                                                printf("%f %f %f %d \n",acc, t_rho,t_phi,t_sec);
+
+                                            }
+                                            
+                                        
+                                        }
+                                    }
+                                }
+                            }
+//                       }
+			  
 		      }
 		  }
 	      }
@@ -868,6 +904,8 @@ void read_inputFile(string file_path, unsigned int num_hits)
                 if (val_iter == 0) x_values.push_back(atof(value.c_str()));
                 else if (val_iter == 1) y_values.push_back(atof(value.c_str()));
                 else if (val_iter == 2) z_values.push_back(atof(value.c_str()));
+		else if (val_iter == 3) pt_values.push_back(atof(value.c_str()));
+
                 val_iter++;
                 
             }
