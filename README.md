@@ -5,9 +5,13 @@ hough-transform
 Various implementation for Hough Transform (all OpenCV functions are referred to 2.4.8):
 
 0) Last CUDA-implementations using a Hough Transform to reconstruct arcs in a circle, for recognizing tracks:
+
     - ht_rhophi.cu: vote in the rhophi parameter space
+    
     - ht_rhophi_AB.cu: vote in the AB parameter space
+    
     - ht_rhophi-0.1.cu: same as ht_rhophi.cu, but with MULTI-GPU support
+    
 
 1) main.cpp + hough.cu + hough.h: Hough Transform C++ plain code + CUDA-Trasform code, with some OpenCV utilities (from http://www.keymolen.com/2013/05/hough-transformation-c-implementation.html)
 
